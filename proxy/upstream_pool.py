@@ -64,27 +64,45 @@ class CircuitBreaker:
         self.failure_count = 0
         self.last_open_time: float = 0.0
         self._lock = asyncio.Lock()
+        self._half_open_allowed = False
 
     async def allow_request(self) -> bool:
         async with self._lock:
-            if self.state == CircuitState.CLOSED:
-                return True
+            now = time.monotonic()
             if self.state == CircuitState.OPEN:
-                if time.monotonic() - self.last_open_time >= self.config.cooldown_sec:
+                if now - self.last_open_time >= self.config.cooldown_sec:
                     self.state = CircuitState.HALF_OPEN
+                    self._half_open_allowed = True
                     return True
                 return False
-            return True
+
+            if self.state == CircuitState.HALF_OPEN:
+                if self._half_open_allowed:
+                    self._half_open_allowed = False
+                    return True
+                return False
+
+            if self.state == CircuitState.CLOSED:
+                return True
+            return False
 
     async def record_success(self):
         async with self._lock:
             if self.state == CircuitState.HALF_OPEN:
                 self.state = CircuitState.CLOSED
+                self._half_open_allowed = False
                 self.failure_count = 0
 
     async def record_failure(self):
         async with self._lock:
             self.failure_count += 1
+            if self.state == CircuitState.HALF_OPEN:
+                self.state = CircuitState.OPEN
+                self.last_open_time = time.monotonic()
+                self.failure_count = 0
+                self._half_open_allowed = False
+                return
+
             if self.failure_count >= self.config.failure_threshold:
                 self.state = CircuitState.OPEN
                 self.last_open_time = time.monotonic()
@@ -99,7 +117,7 @@ class PooledConnection:
 
     @property
     def is_closed(self) -> bool:
-        return self.writer.is_closing()
+        return self.reader.at_eof() or self.writer.is_closing()
 
     async def close(self):
         with suppress(OSError, ConnectionError):
@@ -125,17 +143,49 @@ class PerUpstreamPool:
 
     async def acquire(self) -> PooledConnection:
         await self._semaphore.acquire()
+        success = False
+        try:
+            now = time.monotonic()
+            conn: PooledConnection | None = None
+            to_close: list[PooledConnection] | None = None
 
-        async with self._lock:
-            while self._idle:
-                conn = self._idle.popleft()
-                if not conn.is_closed:
-                    return conn
+            async with self._lock:
+                while self._idle:
+                    candidate = self._idle.popleft()
 
-        reader, writer = await self._timeouts.wait_for_connection(
-            asyncio.open_connection(self._upstream.host, self._upstream.port)
-        )
-        return PooledConnection(reader, writer)
+                    if candidate.is_closed:
+                        to_close.append(candidate)
+                        continue
+
+                    if now - candidate.last_used > self._keepalive_cfg.idle_timeout_sec:
+                        to_close.append(candidate)
+                        continue
+
+                    conn = candidate
+                    break
+
+            if to_close:
+                await asyncio.gather(*(c.close() for c in to_close), return_exceptions=True)
+
+            if conn is not None:
+                conn.last_used = now
+                conn.request_count += 1
+                success = True
+                return conn
+
+            ssl_context = ssl.create_default_context() if self._upstream.tls else None
+            reader, writer = await self._timeouts.wait_for_connection(
+                asyncio.open_connection(self._upstream.host, self._upstream.port, ssl=ssl_context)
+            )
+            conn = PooledConnection(reader, writer)
+            conn.last_used = now
+            conn.request_count = 1
+            success = True
+            return conn
+
+        finally:
+            if not success:
+                self._semaphore.release()
 
     async def release(self, conn: PooledConnection):
         if conn.is_closed:
@@ -246,8 +296,9 @@ class UpstreamsPool:
         self, excluded: set[Upstream] | None = None
     ) -> Upstream | None:
         excluded = excluded or set()
+        count = len(self._upstreams)
+        candidates = []
         async with self._lock:
-            count = len(self._upstreams)
             for _ in range(count):
                 upstream = self._upstreams[self._next_index]
                 self._next_index = (self._next_index + 1) % count
@@ -257,13 +308,15 @@ class UpstreamsPool:
 
                 if not self._status.get(upstream, False):
                     continue
+                candidates.append(upstream)
 
-                breaker = self._breakers.get(upstream)
-                if breaker and not await breaker.allow_request():
-                    continue
+        for upstream in candidates:
+            breaker = self._breakers.get(upstream)
+            if breaker and not await breaker.allow_request():
+                continue
 
-                return upstream
-            return None
+            return upstream
+        return None
 
     async def record_success(self, upstream: Upstream):
         breaker = self._breakers.get(upstream)
