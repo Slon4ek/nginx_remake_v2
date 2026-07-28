@@ -37,6 +37,7 @@ class ReverseProxy:
         self._shutdown_event = asyncio.Event()
         self._metrics = metrics
         self._total_connections_semaphore: asyncio.Semaphore | None = None
+        self._client_tasks: set[asyncio.Task] = set()
 
     @property
     def get_shutdown_event(self) -> asyncio.Event:
@@ -97,6 +98,10 @@ class ReverseProxy:
             logger.warning(
                 "Не все соединения закрылись плавно, принудительно завершаем работу"
             )
+            for task in self._client_tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*self._client_tasks, return_exceptions=True)
 
         logger.info("Останавливаем пул апстримов...")
         await self.pool.shutdown()
@@ -124,14 +129,6 @@ class ReverseProxy:
             await self._send_service_unavailable(writer)
             return
 
-        if self._total_connections_semaphore.locked():
-            logger.warning(
-                "Достигнут лимит подключений (%d). Отклоняем запрос",
-                self.max_conns,
-            )
-            await self._send_service_unavailable(writer)
-            return
-
         if self.rate_limiter:
             peer = writer.get_extra_info("peername")
             client_ip = peer[0] if peer else None
@@ -140,80 +137,68 @@ class ReverseProxy:
                 await self._send_429_too_many_requests(writer)
                 return
 
-        async with self._total_connections_semaphore:
-            await self._metrics.inc_active()
-            try:
-                keep_alive = True
-                requests_handled = 0
+        task = asyncio.current_task()
+        try:
+            self._client_tasks.add(task)
+            async with self._total_connections_semaphore:
+                await self._metrics.inc_active()
+                try:
+                    keep_alive = True
+                    requests_handled = 0
 
-                while keep_alive and not self._is_shutting_down:
-                    # Лимит запросов на одно соединение
-                    if requests_handled >= self.keepalive.max_requests:
-                        logger.debug(
-                            "Max requests per connection reached (%d)",
-                            self.keepalive.max_requests,
+                    while keep_alive and not self._is_shutting_down:
+                        if requests_handled >= self.keepalive.max_requests:
+                            logger.debug(
+                                "Max requests per connection reached (%d)",
+                                self.keepalive.max_requests,
+                            )
+                            break
+
+                        upstream_target = await self.pool.get_next_alive()
+
+                        if not upstream_target:
+                            logger.error("Нет доступных живых апстримов в пуле")
+                            await self._send_service_unavailable(writer)
+                            break
+
+                        handler = ClientHandler(
+                            client_reader=reader,
+                            client_writer=writer,
+                            upstream=upstream_target,
+                            pool=self.pool,
+                            timeouts=self.timeouts,
+                            keepalive=self.keepalive,
+                            metrics=self._metrics,
                         )
-                        break
 
-                    # Выбираем upstream через round-robin + circuit breaker
-                    upstream_target = await self.pool.get_next_alive()
+                        try:
+                            keep_alive = await asyncio.wait_for(
+                                handler.handle(), timeout=self.timeouts.total_sec
+                            )
+                        except asyncio.TimeoutError:
+                            logger.warning(
+                                "Total timeout exceeded for %s",
+                                upstream_target,
+                            )
+                            break
 
-                    if not upstream_target:
-                        logger.error("Нет доступных живых апстримов в пуле")
-                        # Если upstream'ов нет — нет смысла держать соединение
-                        await self._send_service_unavailable(writer)
-                        break
+                        if writer.is_closing():
+                            break
 
-                    handler = ClientHandler(
-                        client_reader=reader,
-                        client_writer=writer,
-                        upstream=upstream_target,
-                        pool=self.pool,
-                        timeouts=self.timeouts,
-                        keepalive=self.keepalive,
-                        metrics=self._metrics,
-                    )
+                        requests_handled += 1
 
-                    # Весь запрос-ответ живёт внутри total_timeout
-                    try:
-                        keep_alive = await asyncio.wait_for(
-                            handler.handle(), timeout=self.timeouts.total_sec
-                        )
-                    except asyncio.TimeoutError:
-                        logger.warning(
-                            "Total timeout exceeded for %s",
-                            upstream_target,
-                        )
-                        break
-
-                    # Если handle() сам закрыл writer,
-                    # выходим из цикла
-                    if writer.is_closing():
-                        break
-
-                    requests_handled += 1
-
-                    # Между запросами — небольшая пауза,
-                    # чтобы не крутить busy-loop
-                    if keep_alive:
-                        await asyncio.sleep(0)
-
-            # ── Обработка ошибок ──
-            except asyncio.TimeoutError:
-                logger.warning(
-                    "Сессия клиента принудительно разорвана: "
-                    "превышен общий таймаут total_ms"
-                )
-            except (RuntimeError, ValueError) as e:
-                logger.error("Внутренний сбой инфраструктуры пула: %s", e)
-                await self._send_service_unavailable(writer)
-            except (OSError, ConnectionError) as e:
-                logger.debug("Сетевой сбой при инициализации соединения: %s", e)
-            finally:
-                await self._metrics.dec_active()
-                # Закрываем клиентский сокет в любом случае,
-                # когда вышли из цикла keep-alive
-                await self._close_writer(writer)
+                        if keep_alive:
+                            await asyncio.sleep(0)
+                except (RuntimeError, ValueError) as e:
+                    logger.error("Внутренний сбой инфраструктуры пула: %s", e)
+                    await self._send_service_unavailable(writer)
+                except (OSError, ConnectionError) as e:
+                    logger.debug("Сетевой сбой при инициализации соединения: %s", e)
+                finally:
+                    await self._metrics.dec_active()
+                    await self._close_writer(writer)
+        finally:
+            self._client_tasks.discard(task)
 
     # ─── Отправка ошибок клиенту ─────────────────────────────
 
