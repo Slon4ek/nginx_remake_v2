@@ -3,11 +3,8 @@ import logging
 import time
 from contextlib import suppress
 
-from proxy.metrics import ProxyMetrics
-from proxy.timeouts import Timeouts
-from proxy.upstream_pool import KeepAliveConfig, Upstream, UpstreamsPool
-from proxy.util.buffered_reader import UnreadableStreamReader
-from proxy.util.http import (
+from proxy.buffered_reader import UnreadableStreamReader
+from proxy.http_parser import (
     BodyStreamer,
     BodyStreamerError,
     HttpRequest,
@@ -16,6 +13,9 @@ from proxy.util.http import (
     HttpResponseParser,
     is_connection_close,
 )
+from proxy.metrics import ProxyMetrics
+from proxy.timeouts import Timeouts
+from proxy.upstream_pool import KeepAliveConfig, Upstream, UpstreamsPool
 
 logger = logging.getLogger(__name__)
 

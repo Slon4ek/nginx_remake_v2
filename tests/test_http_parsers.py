@@ -1,4 +1,4 @@
-from proxy.util.http import HttpRequestParser, HttpResponseParser
+from proxy.http_parser import HttpRequestParser, HttpResponseParser
 
 
 class TestHttpRequestParser:

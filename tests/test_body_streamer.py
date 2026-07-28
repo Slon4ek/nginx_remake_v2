@@ -2,8 +2,8 @@ import asyncio
 
 import pytest
 
-from proxy.util.buffered_reader import UnreadableStreamReader
-from proxy.util.http import BodyStreamer, BodyStreamerError
+from proxy.buffered_reader import UnreadableStreamReader
+from proxy.http_parser import BodyStreamer, BodyStreamerError
 
 
 class MockWriter:

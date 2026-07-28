@@ -2,7 +2,7 @@ import asyncio
 
 import pytest
 
-from proxy.util.buffered_reader import UnreadableStreamReader
+from proxy.buffered_reader import UnreadableStreamReader
 
 
 class TestUnreadableStreamReader:
