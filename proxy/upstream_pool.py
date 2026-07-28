@@ -82,9 +82,7 @@ class CircuitBreaker:
                     return True
                 return False
 
-            if self.state == CircuitState.CLOSED:
-                return True
-            return False
+            return self.state == CircuitState.CLOSED
 
     async def record_success(self):
         async with self._lock:
@@ -165,7 +163,9 @@ class PerUpstreamPool:
                     break
 
             if to_close:
-                await asyncio.gather(*(c.close() for c in to_close), return_exceptions=True)
+                await asyncio.gather(
+                    *(c.close() for c in to_close), return_exceptions=True
+                )
 
             if conn is not None:
                 conn.last_used = now
@@ -175,7 +175,9 @@ class PerUpstreamPool:
 
             ssl_context = ssl.create_default_context() if self._upstream.tls else None
             reader, writer = await self._timeouts.wait_for_connection(
-                asyncio.open_connection(self._upstream.host, self._upstream.port, ssl=ssl_context)
+                asyncio.open_connection(
+                    self._upstream.host, self._upstream.port, ssl=ssl_context
+                )
             )
             conn = PooledConnection(reader, writer)
             conn.last_used = now
@@ -219,10 +221,15 @@ class PerUpstreamPool:
             self._idle = keep
 
     async def shutdown(self):
+        to_close: list[PooledConnection] = []
         async with self._lock:
-            while self._idle:
-                conn = self._idle.popleft()
-                await conn.close()
+            to_close.extend(self._idle)
+            self._idle.clear()
+        if to_close:
+            await asyncio.gather(
+                *(conn.close() for conn in to_close), return_exceptions=True
+            )
+            logger.debug(f"Force-closed {len(to_close)} idle connections")
 
 
 class UpstreamsPool:
@@ -402,11 +409,6 @@ class UpstreamsPool:
     async def run_initial_healthcheck(self) -> None:
         tasks = [self.healthcheck(u) for u in self._upstreams]
         await asyncio.gather(*tasks, return_exceptions=True)
-        logger.info(
-            "Initial healthcheck completed. Alive: %d/%d",
-            len(self.alive_upstreams),
-            len(self._upstreams),
-        )
 
     async def periodic_healthcheck(
         self, interval_sec: float, stop_event: asyncio.Event
