@@ -2,7 +2,7 @@ import asyncio
 import re
 from dataclasses import dataclass, field
 
-from proxy.util.buffered_reader import UnreadableStreamReader
+from proxy.buffered_reader import UnreadableStreamReader
 
 _CHUNK_EXT = re.compile(rb"^([0-9a-fA-F]+)(?:;.*)?\r\n")
 
