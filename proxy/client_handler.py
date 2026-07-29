@@ -99,6 +99,8 @@ class ClientHandler:
                         await asyncio.sleep(delay)
                         continue
                     elif 500 <= self._status_code < 600:
+                        await self._send_502_bad_gateway()
+                        keep_alive = False
                         self._successful_request = False
                         break
 
