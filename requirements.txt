@@ -17,9 +17,10 @@ packaging==26.2
 pluggy==1.6.0
 propcache==0.5.2
 pydantic==2.13.4
-pydantic_core==2.47.0
+pydantic_core==2.46.4
 Pygments==2.20.0
 pytest==9.1.1
+pytest-asyncio==1.4.0
 python-dotenv==1.2.2
 PyYAML==6.0.3
 ruff==0.16.0
