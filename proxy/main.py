@@ -82,6 +82,7 @@ async def main():
         rate_limiter=config.rate_limiter,
         metrics=metrics,
         max_requests=config.keep_alive.max_requests,
+        retry_config=config.retry
     )
 
     try:

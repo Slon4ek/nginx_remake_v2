@@ -5,7 +5,7 @@ Endpoints:
     POST /echo   — возвращает тело запроса как ответ
 """
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException
 
 app = FastAPI()
 
@@ -20,3 +20,7 @@ async def root():
 async def echo(request: Request):
     body = await request.body()
     return body
+
+@app.get("/always_500")
+async def always_500():
+    raise HTTPException(status_code=500, detail="Hi retry")

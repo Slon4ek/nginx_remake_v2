@@ -5,7 +5,7 @@ from contextlib import suppress
 
 from proxy.client_handler import ClientHandler
 from proxy.metrics import ProxyMetrics
-from proxy.models import KeepAliveConfig
+from proxy.models import KeepAliveConfig, RetryConfig
 from proxy.rate_limiter import RateLimiter
 from proxy.timeouts import Timeouts
 from proxy.upstream_pool import UpstreamsPool
@@ -24,6 +24,7 @@ class ReverseProxy:
         max_requests: int,
         metrics: ProxyMetrics,
         keepalive: KeepAliveConfig,
+        retry_config: RetryConfig,
         rate_limiter: RateLimiter | None = None,
     ):
         self.host = host
@@ -33,7 +34,7 @@ class ReverseProxy:
         self.max_conns = max_conns
         self.keepalive = keepalive
         self.rate_limiter = rate_limiter
-
+        self.retry_config = retry_config
         self._server: asyncio.AbstractServer | None = None
         self._is_shutting_down = False
         self._shutdown_event = asyncio.Event()
@@ -172,6 +173,7 @@ class ReverseProxy:
                             timeouts=self.timeouts,
                             keepalive=self.keepalive,
                             metrics=self._metrics,
+                            retry_config=self.retry_config,
                         )
                         async with self._request_semaphore:
                             try:

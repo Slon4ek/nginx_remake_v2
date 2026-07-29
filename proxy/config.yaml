@@ -1,16 +1,62 @@
+# Полный конфиг nginx_remake с всеми доступными опциями и комментариями
+# Сохранить как config.yaml
+
+# Адрес, на котором прокси слушает входящие соединения
 listen: "127.0.0.1:8080"
+
+# Список upstream-серверов (обязательно минимум 1)
 upstreams:
   - host: "127.0.0.1"
     port: 9001
+    tls: false           # использовать TLS для подключения к upstream
   - host: "127.0.0.1"
     port: 9002
+    tls: false
+
+# Таймауты (в миллисекундах)
 timeouts:
-  connect_ms: 1000
-  read_ms: 5000
-  write_ms: 5000
-  total_ms: 10000
+  connect_ms: 1000      # таймаут установки TCP-соединения с upstream
+  read_ms: 15000        # таймаут чтения ответа от upstream
+  write_ms: 15000       # таймаут записи запроса к upstream
+  total_ms: 30000       # общий таймаут всего цикла запрос-ответ
+
+# Лимиты соединений
 limits:
-  max_client_conns: 800
-  max_conns_per_upstream: 400
+  max_client_conns: 1000          # макс. одновременных клиентских соединений
+  max_conns_per_upstream: 100     # макс. соединений на один upstream
+
+# Keep-alive для клиентских соединений
+keep_alive:
+  enabled: true                   # включать keep-alive для клиентов
+  timeout_ms: 60000               # таймаут простоя клиентского соединения (мс)
+  max_requests: 200               # макс. запросов на одно keep-alive соединение
+
+# Keep-alive для upstream-соединений (пул соединений к upstream)
+upstream_keepalive:
+  max_idle: 50                    # макс. idle-соединений в пуле на один upstream
+  idle_timeout_sec: 30.0          # TTL idle-соединения в пуле (секунды)
+  max_requests: 200               # макс. запросов на одно upstream-соединение
+
+# Circuit Breaker (защита от каскадных отказов)
+circuit_breaker:
+  failure_threshold: 10           # ошибок перед открытием цепи
+  cooldown_sec: 30.0              # сек до перехода в half-open
+
+# Retry политика (повтор запросов на другом upstream при ошибке)
+retry:
+  max_retries: 3                  # макс. попыток повтора
+  base_delay_ms: 100              # базовая задержка перед ретраем
+  max_delay_ms: 1000              # макс. задержка (экспоненциальный backoff)
+
+# Rate Limiter (Token Bucket)
+rate_limit:
+  enabled: false                  # включить rate limiting
+  rate: 100.0                     # токенов в секунду (глобально)
+  burst: 200                      # размер ведра (burst)
+  per_client: false               # true = отдельное ведро на IP клиента
+
+# Логирование
 logging:
-  level: "debug"
+  level: "DEBUG"                   # DEBUG, INFO, WARNING, ERROR, CRITICAL
+  file_path: null                 # null = stdout, или путь к файлу
+  format: "[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s"
