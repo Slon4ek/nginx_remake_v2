@@ -4,12 +4,10 @@ from unittest.mock import patch
 
 import pytest
 
-from proxy.config import ProxyConfig
 from proxy.metrics import ProxyMetrics
 from proxy.models import (
     CircuitBreakerConfig,
     KeepAliveConfig,
-    Limits,
     RetryConfig,
     Upstream,
     UpstreamKeepAliveConfig,
@@ -118,7 +116,7 @@ class TestE2E:
         us_port = us.sockets[0].getsockname()[1]
 
         async with us:
-            server, proxy_port, pool, ptask = await _start_proxy(us_port)
+            server, proxy_port, _, ptask = await _start_proxy(us_port)
             try:
                 r, w = await asyncio.open_connection("127.0.0.1", proxy_port)
                 w.write(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n")
@@ -149,7 +147,7 @@ class TestE2E:
         us_port = us.sockets[0].getsockname()[1]
 
         async with us:
-            server, proxy_port, pool, ptask = await _start_proxy(us_port)
+            server, proxy_port, _, ptask = await _start_proxy(us_port)
             try:
                 r, w = await asyncio.open_connection("127.0.0.1", proxy_port)
                 payload = b"hello=world"
@@ -181,7 +179,7 @@ class TestE2E:
         us_port = us.sockets[0].getsockname()[1]
 
         async with us:
-            server, proxy_port, pool, ptask = await _start_proxy(us_port)
+            server, proxy_port, _, ptask = await _start_proxy(us_port)
             # Stop the upstream before sending request
             us.close()
 
@@ -216,7 +214,7 @@ class TestE2E:
 
         async with us:
             retry = RetryConfig(max_retries=1, base_delay_ms=10, max_delay_ms=100)
-            server, proxy_port, pool, ptask = await _start_proxy(us_port, retry_cfg=retry)
+            server, proxy_port, _, ptask = await _start_proxy(us_port, retry_cfg=retry)
             try:
                 r, w = await asyncio.open_connection("127.0.0.1", proxy_port)
                 w.write(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n")
@@ -242,7 +240,7 @@ class TestE2E:
 
         async with us:
             retry = RetryConfig(max_retries=1, base_delay_ms=10, max_delay_ms=100)
-            server, proxy_port, pool, ptask = await _start_proxy(us_port, retry_cfg=retry)
+            server, proxy_port, _, ptask = await _start_proxy(us_port, retry_cfg=retry)
             try:
                 r, w = await asyncio.open_connection("127.0.0.1", proxy_port)
                 w.write(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n")
@@ -256,8 +254,8 @@ class TestE2E:
 
     async def test_keepalive_multiple_requests(self):
         async def upstream(reader, writer):
-            data = await asyncio.wait_for(reader.read(65536), timeout=2.0)
-            # Parse request number from path
+            await asyncio.wait_for(reader.read(65536), timeout=2.0)
+
             writer.write(
                 b"HTTP/1.1 200 OK\r\n"
                 b"Content-Length: 12\r\n"
@@ -271,7 +269,7 @@ class TestE2E:
         us_port = us.sockets[0].getsockname()[1]
 
         async with us:
-            server, proxy_port, pool, ptask = await _start_proxy(us_port)
+            server, proxy_port, _, ptask = await _start_proxy(us_port)
             try:
                 r, w = await asyncio.open_connection("127.0.0.1", proxy_port)
 

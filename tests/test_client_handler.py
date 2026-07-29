@@ -2,8 +2,6 @@ import asyncio
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
 from proxy.client_handler import ClientHandler
 from proxy.metrics import ProxyMetrics
 from proxy.models import KeepAliveConfig, RetryConfig, Upstream
@@ -102,7 +100,7 @@ class TestClientHandler:
     # ─── Basic success ────────────────────────────────────────
 
     async def test_get_200_with_keepalive(self):
-        handler, pool, cw = make_handler(
+        handler, pool, _ = make_handler(
             b"GET / HTTP/1.1\r\nHost: x\r\n\r\n",
             b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello",
         )
@@ -123,7 +121,7 @@ class TestClientHandler:
         cw.close.assert_called_once()
 
     async def test_client_disconnect_return_false(self):
-        handler, pool, cw = make_handler(b"")
+        handler, pool, _ = make_handler(b"")
         ka = await handler.handle()
         assert ka is False
         pool.record_success.assert_not_awaited()
@@ -137,7 +135,7 @@ class TestClientHandler:
             b"Content-Length: %d\r\n\r\n%s" % (len(body), body)
         )
         resp = b"HTTP/1.1 200 OK\r\nContent-Length: 7\r\n\r\npayload"
-        handler, pool, cw = make_handler(req, resp)
+        handler, pool, _ = make_handler(req, resp)
         ka = await handler.handle()
         assert ka is True
         pool.record_success.assert_awaited_once()
@@ -145,7 +143,7 @@ class TestClientHandler:
     # ─── Retry: success after N-1 failures ────────────────────
 
     async def test_retry_500_then_200(self):
-        handler, pool, cw = make_handler(
+        handler, pool, _ = make_handler(
             b"GET / HTTP/1.1\r\nHost: x\r\n\r\n",
             b"HTTP/1.1 500\r\nContent-Length: 2\r\n\r\nE1",
             b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello",
@@ -157,7 +155,7 @@ class TestClientHandler:
         assert handler._status_code == 200
 
     async def test_retry_500_500_then_200(self):
-        handler, pool, cw = make_handler(
+        handler, pool, _ = make_handler(
             b"GET / HTTP/1.1\r\nHost: x\r\n\r\n",
             b"HTTP/1.1 500\r\nContent-Length: 2\r\n\r\nE1",
             b"HTTP/1.1 500\r\nContent-Length: 2\r\n\r\nE2",
@@ -169,7 +167,7 @@ class TestClientHandler:
         assert handler._status_code == 200
 
     async def test_retry_500_then_502_then_200(self):
-        handler, pool, cw = make_handler(
+        handler, pool, _ = make_handler(
             b"GET / HTTP/1.1\r\nHost: x\r\n\r\n",
             b"HTTP/1.1 500\r\nContent-Length: 2\r\n\r\nE1",
             b"HTTP/1.1 502\r\nContent-Length: 2\r\n\r\nE2",
@@ -198,7 +196,7 @@ class TestClientHandler:
 
     async def test_retry_uses_at_most_max_retries_plus_one(self):
         rc = RetryConfig(max_retries=1, base_delay_ms=10, max_delay_ms=50)
-        handler, pool, cw = make_handler(
+        handler, pool, _ = make_handler(
             b"GET / HTTP/1.1\r\nHost: x\r\n\r\n",
             b"HTTP/1.1 500\r\nContent-Length: 2\r\n\r\nE1",
             b"HTTP/1.1 500\r\nContent-Length: 2\r\n\r\nE2",
@@ -212,7 +210,7 @@ class TestClientHandler:
 
     async def test_retry_zero_max_retries_no_retry(self):
         rc = RetryConfig(max_retries=0, base_delay_ms=10, max_delay_ms=50)
-        handler, pool, cw = make_handler(
+        handler, pool, _ = make_handler(
             b"GET / HTTP/1.1\r\nHost: x\r\n\r\n",
             b"HTTP/1.1 500\r\nContent-Length: 2\r\n\r\nE1",
             b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello",
@@ -241,7 +239,7 @@ class TestClientHandler:
     # ─── 4xx is not retried, not treated as upstream error ────
 
     async def test_get_400_is_not_retried(self):
-        handler, pool, cw = make_handler(
+        handler, pool, _ = make_handler(
             b"GET / HTTP/1.1\r\nHost: x\r\n\r\n",
             b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n",
             b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello",
@@ -336,7 +334,7 @@ class TestClientHandler:
 
     async def test_metrics_recorded_for_success(self):
         m = ProxyMetrics()
-        handler, pool, cw = make_handler(
+        handler, _, _ = make_handler(
             b"GET / HTTP/1.1\r\nHost: x\r\n\r\n",
             b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello",
             metrics=m,
@@ -350,7 +348,7 @@ class TestClientHandler:
 
     async def test_metrics_recorded_for_retry(self):
         m = ProxyMetrics()
-        handler, pool, cw = make_handler(
+        handler, _, _ = make_handler(
             b"GET / HTTP/1.1\r\nHost: x\r\n\r\n",
             b"HTTP/1.1 500\r\nContent-Length: 2\r\n\r\nE1",
             b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello",
@@ -363,7 +361,7 @@ class TestClientHandler:
 
     async def test_metrics_recorded_for_all_fail(self):
         m = ProxyMetrics()
-        handler, pool, cw = make_handler(
+        handler, _, _ = make_handler(
             b"GET / HTTP/1.1\r\nHost: x\r\n\r\n",
             b"HTTP/1.1 500\r\nContent-Length: 2\r\n\r\nE1",
             b"HTTP/1.1 500\r\nContent-Length: 2\r\n\r\nE2",
@@ -378,7 +376,7 @@ class TestClientHandler:
     # ─── record_success / record_failure per outcome ──────────
 
     async def test_record_success_on_200(self):
-        handler, pool, cw = make_handler(
+        handler, pool, _ = make_handler(
             b"GET / HTTP/1.1\r\nHost: x\r\n\r\n",
             b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n",
         )
@@ -387,7 +385,7 @@ class TestClientHandler:
         pool.record_failure.assert_not_awaited()
 
     async def test_record_success_on_retry_then_200(self):
-        handler, pool, cw = make_handler(
+        handler, pool, _ = make_handler(
             b"GET / HTTP/1.1\r\nHost: x\r\n\r\n",
             b"HTTP/1.1 500\r\nContent-Length: 2\r\n\r\nE1",
             b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n",
@@ -397,7 +395,7 @@ class TestClientHandler:
         pool.record_failure.assert_not_awaited()
 
     async def test_record_failure_on_all_retry_exhausted(self):
-        handler, pool, cw = make_handler(
+        handler, pool, _ = make_handler(
             b"GET / HTTP/1.1\r\nHost: x\r\n\r\n",
             b"HTTP/1.1 500\r\nContent-Length: 2\r\n\r\nE1",
             b"HTTP/1.1 500\r\nContent-Length: 2\r\n\r\nE2",

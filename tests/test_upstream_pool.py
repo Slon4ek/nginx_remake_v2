@@ -275,7 +275,7 @@ class TestValidation:
 
 class TestConfigDefaults:
     def test_all_defaults_applied(self, timeouts):
-        from proxy.config import ProxyConfig, Limits
+        from proxy.config import ProxyConfig
 
         # Test that defaults are correctly applied
         config = ProxyConfig(

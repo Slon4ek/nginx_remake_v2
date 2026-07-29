@@ -5,7 +5,7 @@ Endpoints:
     POST /echo   — возвращает тело запроса как ответ
 """
 
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 
 app = FastAPI()
 

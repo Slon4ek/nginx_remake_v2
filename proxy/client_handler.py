@@ -12,10 +12,11 @@ from proxy.http_parser import (
     HttpRequestParser,
     HttpResponse,
     HttpResponseParser,
-    is_connection_close, safe_method,
+    is_connection_close,
+    safe_method,
 )
 from proxy.metrics import ProxyMetrics
-from proxy.models import KeepAliveConfig, Upstream, RetryConfig
+from proxy.models import KeepAliveConfig, RetryConfig, Upstream
 from proxy.timeouts import Timeouts
 from proxy.upstream_pool import UpstreamsPool
 
