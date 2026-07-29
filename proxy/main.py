@@ -81,6 +81,7 @@ async def main():
         keepalive=config.keep_alive,
         rate_limiter=config.rate_limiter,
         metrics=metrics,
+        max_requests=config.keep_alive.max_requests,
     )
 
     try:

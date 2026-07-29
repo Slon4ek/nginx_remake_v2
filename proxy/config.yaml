@@ -6,11 +6,11 @@ upstreams:
     port: 9002
 timeouts:
   connect_ms: 1000
-  read_ms: 15000
-  write_ms: 15000
-  total_ms: 30000
+  read_ms: 5000
+  write_ms: 5000
+  total_ms: 10000
 limits:
-  max_client_conns: 1000
-  max_conns_per_upstream: 500
+  max_client_conns: 800
+  max_conns_per_upstream: 400
 logging:
   level: "debug"
