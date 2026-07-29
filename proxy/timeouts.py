@@ -1,6 +1,6 @@
 import asyncio
 from collections.abc import Coroutine
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, TypeVar
 
 T = TypeVar("T")
@@ -8,10 +8,10 @@ T = TypeVar("T")
 
 @dataclass(frozen=True)
 class Timeouts:
-    connect_ms: int = 1000
-    read_ms: int = 15000
-    write_ms: int = 15000
-    total_ms: int = 30000
+    connect_ms: int = field(default=1000, metadata={"gt": 0})
+    read_ms: int = field(default=15000, metadata={"gt": 0})
+    write_ms: int = field(default=15000, metadata={"gt": 0})
+    total_ms: int = field(default=30000, metadata={"gt": 0})
 
     @property
     def connect_sec(self) -> float:
