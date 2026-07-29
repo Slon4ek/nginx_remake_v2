@@ -1,4 +1,5 @@
 import asyncio
+import errno
 import logging
 import time
 from contextlib import suppress
@@ -14,8 +15,9 @@ from proxy.http_parser import (
     is_connection_close,
 )
 from proxy.metrics import ProxyMetrics
+from proxy.models import KeepAliveConfig, Upstream
 from proxy.timeouts import Timeouts
-from proxy.upstream_pool import KeepAliveConfig, Upstream, UpstreamsPool
+from proxy.upstream_pool import UpstreamsPool
 
 logger = logging.getLogger(__name__)
 
@@ -43,9 +45,9 @@ class ClientHandler:
         self._bytes_in = 0
         self._bytes_out = 0
         self._status_code = 0
+        self._successful_request = True
 
     async def handle(self) -> bool:
-        upstream_writer: asyncio.StreamWriter | None = None
         start_request_time = time.perf_counter()
         keep_alive = False
 
@@ -63,12 +65,9 @@ class ClientHandler:
                 self.upstream,
             )
 
-            async with self.pool.acquire_connection(self.upstream):
-                up_reader, up_writer = await self.timeouts.wait_for_connection(
-                    asyncio.open_connection(self.upstream.host, self.upstream.port)
-                )
-                upstream_writer = up_writer
-                up_reader = UnreadableStreamReader(up_reader)
+            async with self.pool.acquire_connection(self.upstream) as pooled_connection:
+                up_writer = pooled_connection.writer
+                up_reader = UnreadableStreamReader(pooled_connection.reader)
 
                 modified_req = self._modify_request_headers(req_meta, keep_alive)
                 up_writer.write(modified_req.to_bytes())
@@ -81,9 +80,13 @@ class ClientHandler:
 
                 resp_meta = await self._read_response_headers(up_reader)
                 if not resp_meta:
+                    self._successful_request = False
                     return False
 
                 self._status_code = resp_meta.status_code
+                if 500 <= self._status_code < 600:
+                    self._successful_request = False
+
                 logger.debug(
                     "[←] %s %s от %s",
                     resp_meta.status_code,
@@ -115,21 +118,22 @@ class ClientHandler:
             )
             await self._send_502_bad_gateway()
             keep_alive = False
-        except (OSError, ConnectionError) as e:
+            self._successful_request = False
+        except (OSError, ConnectionError, BrokenPipeError) as e:
+            if e.errno in (errno.ECONNRESET, errno.EPIPE, errno.ECONNABORTED):
+                logger.debug("Client closed connection during write: %s", e)
             logger.error("Сетевой сбой I/O при работе с %s: %s", self.upstream, e)
             await self._send_502_bad_gateway()
             keep_alive = False
+            self._successful_request = False
         except RuntimeError as e:
             logger.error(
                 "Запрос отклонен: пул апстримов перегружен или закрывается: %s", e
             )
             await self._send_503_service_unavailable()
             keep_alive = False
+            self._successful_request = False
         finally:
-            if upstream_writer:
-                with suppress(OSError, ConnectionError):
-                    upstream_writer.close()
-                    await upstream_writer.wait_closed()
             if not keep_alive:
                 with suppress(OSError, ConnectionError):
                     self.client_writer.close()
@@ -141,6 +145,10 @@ class ClientHandler:
             await self._metrics.record_status(self._status_code)
             await self._metrics.record_latency(duration * 1000)
 
+        if self._successful_request:
+            await self.pool.record_success(self.upstream)
+        else:
+            await self.pool.record_failure(self.upstream)
         return keep_alive
 
     async def _read_request_headers(self) -> HttpRequest | None:
@@ -183,11 +191,9 @@ class ClientHandler:
             return None
 
         if body_remainder:
-            # Возвращаем тело, пришедшее вместе с заголовками
             if isinstance(reader, UnreadableStreamReader):
                 reader.unread(body_remainder)
             else:
-                # Для обычного StreamReader создаем обертку
                 reader = UnreadableStreamReader(reader)
                 reader.unread(body_remainder)
 
