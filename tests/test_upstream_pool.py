@@ -71,33 +71,36 @@ class TestRoundRobin:
 
 
 class TestCircuitBreaker:
-    def test_allows_requests_when_closed(self):
+    @pytest.mark.asyncio
+    async def test_allows_requests_when_closed(self):
         cb = CircuitBreaker(CircuitBreakerConfig(failure_threshold=3, cooldown_sec=30))
-        assert asyncio.run(cb.allow_request()) is True
+        assert cb.allow_request() is True
 
     def test_opens_after_failures(self):
         cb = CircuitBreaker(CircuitBreakerConfig(failure_threshold=3, cooldown_sec=30))
         for _ in range(3):
             asyncio.run(cb.record_failure())
-        assert asyncio.run(cb.allow_request()) is False
+        assert cb.allow_request() is False
 
-    def test_half_open_after_cooldown(self):
+    @pytest.mark.asyncio
+    async def test_half_open_after_cooldown(self):
         cb = CircuitBreaker(
             CircuitBreakerConfig(failure_threshold=1, cooldown_sec=0.05)
         )
-        asyncio.run(cb.record_failure())
-        assert asyncio.run(cb.allow_request()) is False
-        asyncio.run(asyncio.sleep(0.06))
-        assert asyncio.run(cb.allow_request()) is True
+        await cb.record_failure()
+        assert cb.allow_request() is False
+        await asyncio.sleep(0.06)
+        assert cb.allow_request() is True
 
-    def test_closes_after_success_in_half_open(self):
+    @pytest.mark.asyncio
+    async def test_closes_after_success_in_half_open(self):
         cb = CircuitBreaker(
             CircuitBreakerConfig(failure_threshold=1, cooldown_sec=0.05)
         )
-        asyncio.run(cb.record_failure())
-        asyncio.run(asyncio.sleep(0.06))
-        asyncio.run(cb.allow_request())
-        asyncio.run(cb.record_success())
+        await cb.record_failure()
+        await asyncio.sleep(0.06)
+        cb.allow_request()
+        await cb.record_success()
         assert cb.state == CircuitState.CLOSED
         assert cb.failure_count == 0
 
@@ -126,6 +129,7 @@ class TestAcquireRelease:
     def mock_connection(self):
         """Создаёт мок соединения (reader, writer)."""
         reader = AsyncMock(spec=asyncio.StreamReader)
+        reader.at_eof.return_value = False
         writer = AsyncMock(spec=asyncio.StreamWriter)
         writer.is_closing.return_value = False
         writer.close = MagicMock()
@@ -143,7 +147,7 @@ class TestAcquireRelease:
             async with pool.acquire_connection(u) as conn:
                 assert conn is not None
                 assert not conn.is_closed
-                assert conn.request_count == 0
+                assert conn.request_count == 1
 
     @pytest.mark.asyncio
     async def test_reuse_idle_connection(self, pool, mock_connection):
@@ -172,6 +176,7 @@ class TestAcquireRelease:
         pool._per_upstream_pools[u]._semaphore = asyncio.Semaphore(2)
 
         mock_reader = AsyncMock(spec=asyncio.StreamReader)
+        mock_reader.at_eof.return_value = False
         mock_writer = AsyncMock(spec=asyncio.StreamWriter)
         mock_writer.is_closing.return_value = False
         mock_writer.close = MagicMock()
@@ -263,3 +268,45 @@ class TestValidation:
     def test_zero_max_conns_raises(self, upstreams, timeouts):
         with pytest.raises(ValueError, match="max_conns_per_upstream must be > 0"):
             UpstreamsPool(upstreams, timeouts, 0)
+
+
+# ─── Config Defaults ─────────────────────────────────────────
+
+
+class TestConfigDefaults:
+    def test_all_defaults_applied(self, timeouts):
+        from proxy.config import ProxyConfig, Limits
+
+        # Test that defaults are correctly applied
+        config = ProxyConfig(
+            listen="127.0.0.1:8080",
+            upstreams=[{"host": "127.0.0.1", "port": 9001}],
+        )
+        assert config.listen == "127.0.0.1:8080"
+        assert len(config.upstreams) == 1
+        assert config.limits.max_client_conns == 1000
+        assert config.limits.max_conns_per_upstream == 100
+        assert config.timeouts.connect_ms == 1000
+        assert config.timeouts.read_ms == 15000
+        assert config.timeouts.write_ms == 15000
+        assert config.timeouts.total_ms == 30000
+        assert config.keep_alive.enabled is True
+        assert config.keep_alive.timeout_ms == 60000
+        assert config.keep_alive.max_requests == 200
+        assert config.upstream_keepalive.max_idle == 50
+        assert config.upstream_keepalive.idle_timeout_sec == 30.0
+        assert config.upstream_keepalive.max_requests == 200
+        assert config.circuit_breaker is not None
+        assert config.circuit_breaker.failure_threshold == 10
+        assert config.circuit_breaker.cooldown_sec == 30.0
+        assert config.retry.max_retries == 2
+        assert config.retry.base_delay_ms == 100
+        assert config.retry.max_delay_ms == 1000
+        assert config.rate_limit.enabled is False
+        assert config.rate_limit.rate == 100.0
+        assert config.rate_limit.burst == 200
+        assert config.rate_limit.per_client is False
+        assert config.rate_limiter is None
+        assert config.logging.level == "INFO"
+        assert config.logging.file_path is None
+        assert config.rate_limiter is None

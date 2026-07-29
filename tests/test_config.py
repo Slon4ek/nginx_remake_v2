@@ -396,14 +396,15 @@ upstreams:
         # Keep-alive
         assert config.keep_alive.enabled is True
         assert config.keep_alive.timeout_ms == 60000
-        assert config.keep_alive.max_requests == 100
+        assert config.keep_alive.max_requests == 200
 
         # Upstream keep-alive
-        assert config.upstream_keepalive.max_idle == 10
-        assert config.upstream_keepalive.idle_timeout_sec == 60.0
+        assert config.upstream_keepalive.max_idle == 50
+        assert config.upstream_keepalive.idle_timeout_sec == 30.0
+        assert config.upstream_keepalive.max_requests == 200
 
-        # Circuit breaker = None
-        assert config.circuit_breaker is None
+        # Circuit breaker is not None by default
+        assert config.circuit_breaker is not None
 
         # Retry
         assert config.retry.max_retries == 2

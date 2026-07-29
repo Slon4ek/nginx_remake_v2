@@ -5,50 +5,11 @@ import ssl
 import time
 from collections import deque
 from contextlib import asynccontextmanager, suppress
-from dataclasses import dataclass
 
+from proxy.models import CircuitBreakerConfig, Upstream, UpstreamKeepAliveConfig
 from proxy.timeouts import Timeouts
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True)
-class Upstream:
-    host: str
-    port: int
-    tls: bool = False
-
-    def address(self) -> tuple[str, int]:
-        return self.host, self.port
-
-    def __str__(self) -> str:
-        return f"{self.host}:{self.port}"
-
-
-@dataclass
-class KeepAliveConfig:
-    enabled: bool = True
-    timeout_ms: int = 60000
-    max_requests: int = 100
-
-
-@dataclass
-class UpstreamKeepAliveConfig:
-    max_idle: int = 10
-    idle_timeout_sec: float = 60.0
-
-
-@dataclass
-class RetryConfig:
-    max_retries: int = 2
-    base_delay_ms: int = 100
-    max_delay_ms: int = 1000
-
-
-@dataclass
-class CircuitBreakerConfig:
-    failure_threshold: int = 5
-    cooldown_sec: float = 30.0
 
 
 class CircuitState:
@@ -66,23 +27,22 @@ class CircuitBreaker:
         self._lock = asyncio.Lock()
         self._half_open_allowed = False
 
-    async def allow_request(self) -> bool:
-        async with self._lock:
-            now = time.monotonic()
-            if self.state == CircuitState.OPEN:
-                if now - self.last_open_time >= self.config.cooldown_sec:
-                    self.state = CircuitState.HALF_OPEN
-                    self._half_open_allowed = True
-                    return True
-                return False
+    def allow_request(self) -> bool:
+        now = time.monotonic()
+        if self.state == CircuitState.OPEN:
+            if now - self.last_open_time >= self.config.cooldown_sec:
+                self.state = CircuitState.HALF_OPEN
+                self._half_open_allowed = True
+                return True
+            return False
 
-            if self.state == CircuitState.HALF_OPEN:
-                if self._half_open_allowed:
-                    self._half_open_allowed = False
-                    return True
-                return False
+        if self.state == CircuitState.HALF_OPEN:
+            if self._half_open_allowed:
+                self._half_open_allowed = False
+                return True
+            return False
 
-            return self.state == CircuitState.CLOSED
+        return self.state == CircuitState.CLOSED
 
     async def record_success(self):
         async with self._lock:
@@ -145,13 +105,16 @@ class PerUpstreamPool:
         try:
             now = time.monotonic()
             conn: PooledConnection | None = None
-            to_close: list[PooledConnection] | None = None
+            to_close: list[PooledConnection] = []
 
             async with self._lock:
                 while self._idle:
                     candidate = self._idle.popleft()
 
-                    if candidate.is_closed:
+                    if (
+                        candidate.is_closed
+                        or candidate.request_count >= self._keepalive_cfg.max_requests
+                    ):
                         to_close.append(candidate)
                         continue
 
@@ -169,7 +132,6 @@ class PerUpstreamPool:
 
             if conn is not None:
                 conn.last_used = now
-                conn.request_count += 1
                 success = True
                 return conn
 
@@ -196,6 +158,11 @@ class PerUpstreamPool:
 
         conn.last_used = time.monotonic()
         conn.request_count += 1
+
+        if conn.request_count >= self._keepalive_cfg.max_requests:
+            self._semaphore.release()
+            await conn.close()
+            return
 
         async with self._lock:
             if len(self._idle) < self._keepalive_cfg.max_idle:
@@ -303,9 +270,8 @@ class UpstreamsPool:
         self, excluded: set[Upstream] | None = None
     ) -> Upstream | None:
         excluded = excluded or set()
-        count = len(self._upstreams)
-        candidates = []
         async with self._lock:
+            count = len(self._upstreams)
             for _ in range(count):
                 upstream = self._upstreams[self._next_index]
                 self._next_index = (self._next_index + 1) % count
@@ -315,15 +281,16 @@ class UpstreamsPool:
 
                 if not self._status.get(upstream, False):
                     continue
-                candidates.append(upstream)
 
-        for upstream in candidates:
-            breaker = self._breakers.get(upstream)
-            if breaker and not await breaker.allow_request():
-                continue
+                breaker = self._breakers.get(upstream)
+                if breaker and not breaker.allow_request():
+                    logger.debug(
+                        "Circuit breaker not allowed %s %s", upstream, breaker.state
+                    )
+                    continue
 
-            return upstream
-        return None
+                return upstream
+            return None
 
     async def record_success(self, upstream: Upstream):
         breaker = self._breakers.get(upstream)
