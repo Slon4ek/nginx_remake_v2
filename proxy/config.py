@@ -1,63 +1,58 @@
 from dataclasses import dataclass, field, fields
 from pathlib import Path
+from typing import TypeVar
 
 import yaml
 
-from proxy.rate_limiter import RateLimiter
-from proxy.timeouts import Timeouts
-from proxy.upstream_pool import (
+from proxy.models import (
     CircuitBreakerConfig,
     KeepAliveConfig,
+    Limits,
+    LoggingConfig,
+    RateLimitConfig,
     RetryConfig,
     Upstream,
     UpstreamKeepAliveConfig,
 )
+from proxy.rate_limiter import RateLimiter
+from proxy.timeouts import Timeouts
+
+T = TypeVar("T")
 
 
-@dataclass
-class Limits:
-    """
-    Лимиты ресурсов прокси.
+def load_dataclass(cls: type[T], data: dict, prefix: str = "") -> T:
+    if not isinstance(data, dict):
+        raise TypeError(
+            f"'{prefix}' must be an object" if prefix else "Data must be an object"
+        )
 
-    Attributes:
-        max_client_conns: Максимальное количество одновременных клиентских подключений.
-        max_conns_per_upstream: Максимальное количество одновременных соединений к одному upstream.
-    """
+    kwargs = {}
+    for f in fields(cls):
+        raw_val = data.get(f.name, getattr(cls, f.name))
 
-    max_client_conns: int = 1000
-    max_conns_per_upstream: int = 100
+        # Приведение типа
+        if f.type is int:
+            val = int(raw_val)
+        elif f.type is float:
+            val = float(raw_val)
+        elif f.type is bool:
+            val = bool(raw_val)
+        else:
+            val = raw_val
 
+        meta = f.metadata
+        if "gt" in meta and val <= meta["gt"]:
+            raise ValueError(f"'{prefix}.{f.name}' must be > {meta['gt']}, got {val}")
+        if "ge" in meta and val < meta["ge"]:
+            raise ValueError(f"'{prefix}.{f.name}' must be >= {meta['ge']}, got {val}")
+        if "lt" in meta and val >= meta["lt"]:
+            raise ValueError(f"'{prefix}.{f.name}' must be < {meta['lt']}, got {val}")
+        if "le" in meta and val > meta["le"]:
+            raise ValueError(f"'{prefix}.{f.name}' must be <= {meta['le']}, got {val}")
 
-@dataclass
-class RateLimitConfig:
-    """Конфигурация ограничения скорости.
+        kwargs[f.name] = val
 
-    Attributes:
-        enabled: Флаг включения ограничения скорости.
-        rate: Скорость ограничения в запросах в секунду.
-        burst: Максимальное количество запросов в секунду.
-        per_client: Флаг ограничения по клиенту.
-    """
-
-    enabled: bool = False
-    rate: float = 100.0
-    burst: int = 200
-    per_client: bool = False
-
-
-@dataclass
-class LoggingConfig:
-    """Конфигурация логирования.
-
-    Attributes:
-        level: Уровень логирования: DEBUG, INFO, WARNING, ERROR, CRITICAL.
-        file_path: Путь к файлу лога (если None — вывод в stdout).
-        format: Строка форматирования Python logging.
-    """
-
-    level: str = "INFO"
-    file_path: str | None = None
-    format: str = "[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s"
+    return cls(**kwargs)
 
 
 @dataclass
@@ -71,10 +66,10 @@ class ProxyConfig:
     upstream_keepalive: UpstreamKeepAliveConfig = field(
         default_factory=UpstreamKeepAliveConfig
     )
-    circuit_breaker: CircuitBreakerConfig | None = None
+    circuit_breaker: CircuitBreakerConfig = field(default_factory=CircuitBreakerConfig)
     retry: RetryConfig = field(default_factory=RetryConfig)
     rate_limit: RateLimitConfig = field(default_factory=RateLimitConfig)
-    rate_limiter: RateLimiter | None = None
+    rate_limiter: RateLimiter | None = field(default=None)
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "ProxyConfig":
@@ -112,72 +107,29 @@ class ProxyConfig:
             raise ValueError("At least one upstream is required")
 
         raw_timeouts = data.get("timeouts", {})
-        if not isinstance(raw_timeouts, dict):
-            raise TypeError("'timeouts' must be an object")
-
-        timeouts_kwargs = {}
-        for f in fields(Timeouts):
-            timeouts_kwargs[f.name] = int(
-                raw_timeouts.get(f.name, getattr(Timeouts, f.name))
-            )
-        timeouts = Timeouts(**timeouts_kwargs)
-
-        for name, val in [
-            ("connect_ms", timeouts.connect_ms),
-            ("read_ms", timeouts.read_ms),
-            ("write_ms", timeouts.write_ms),
-            ("total_ms", timeouts.total_ms),
-        ]:
-            if val <= 0:
-                raise ValueError(f"'{name}' must be > 0, got {val}")
+        timeouts = load_dataclass(Timeouts, raw_timeouts, "timeouts")
 
         raw_limits = data.get("limits", {})
-        if not isinstance(raw_limits, dict):
-            raise TypeError("'limits' must be an object")
-        limits = Limits(
-            max_client_conns=int(raw_limits.get("max_client_conns", 1000)),
-            max_conns_per_upstream=int(raw_limits.get("max_conns_per_upstream", 100)),
-        )
-        if limits.max_client_conns <= 0 or limits.max_conns_per_upstream <= 0:
-            raise ValueError(
-                "'max_client_conns' and 'max_conns_per_upstream' must be > 0"
-            )
+        limits = load_dataclass(Limits, raw_limits, "limits")
 
         raw_ka = data.get("keep_alive", {})
-        keep_alive = KeepAliveConfig(
-            enabled=bool(raw_ka.get("enabled", True)),
-            timeout_ms=int(raw_ka.get("timeout_ms", 60000)),
-            max_requests=int(raw_ka.get("max_requests", 100)),
-        )
+        keep_alive = load_dataclass(KeepAliveConfig, raw_ka, "keep_alive")
 
         raw_uk = data.get("upstream_keepalive", {})
-        upstream_keepalive = UpstreamKeepAliveConfig(
-            max_idle=int(raw_uk.get("max_idle", 10)),
-            idle_timeout_sec=float(raw_uk.get("idle_timeout_sec", 60.0)),
+        upstream_keepalive = load_dataclass(
+            UpstreamKeepAliveConfig, raw_uk, "upstream_keepalive"
         )
 
         raw_cb = data.get("circuit_breaker", {})
-        circuit_breaker = None
-        if raw_cb:
-            circuit_breaker = CircuitBreakerConfig(
-                failure_threshold=int(raw_cb.get("failure_threshold", 5)),
-                cooldown_sec=float(raw_cb.get("cooldown_sec", 30.0)),
-            )
+        circuit_breaker = load_dataclass(
+            CircuitBreakerConfig, raw_cb, "circuit_breaker"
+        )
 
         raw_retry = data.get("retry", {})
-        retry = RetryConfig(
-            max_retries=int(raw_retry.get("max_retries", 2)),
-            base_delay_ms=int(raw_retry.get("base_delay_ms", 100)),
-            max_delay_ms=int(raw_retry.get("max_delay_ms", 1000)),
-        )
+        retry = load_dataclass(RetryConfig, raw_retry, "retry")
 
         raw_rl = data.get("rate_limit", {})
-        rate_limit = RateLimitConfig(
-            enabled=bool(raw_rl.get("enabled", False)),
-            rate=float(raw_rl.get("rate", 100.0)),
-            burst=int(raw_rl.get("burst", 200)),
-            per_client=bool(raw_rl.get("per_client", False)),
-        )
+        rate_limit = load_dataclass(RateLimitConfig, raw_rl, "rate_limit")
 
         raw_logging = data.get("logging", {})
         if not isinstance(raw_logging, dict):
