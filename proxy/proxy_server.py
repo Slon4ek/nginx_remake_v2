@@ -5,9 +5,10 @@ from contextlib import suppress
 
 from proxy.client_handler import ClientHandler
 from proxy.metrics import ProxyMetrics
+from proxy.models import KeepAliveConfig
 from proxy.rate_limiter import RateLimiter
 from proxy.timeouts import Timeouts
-from proxy.upstream_pool import KeepAliveConfig, UpstreamsPool
+from proxy.upstream_pool import UpstreamsPool
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +21,7 @@ class ReverseProxy:
         upstream_pool: UpstreamsPool,
         timeouts: Timeouts,
         max_conns: int,
+        max_requests: int,
         metrics: ProxyMetrics,
         keepalive: KeepAliveConfig,
         rate_limiter: RateLimiter | None = None,
@@ -38,6 +40,7 @@ class ReverseProxy:
         self._metrics = metrics
         self._total_connections_semaphore: asyncio.Semaphore | None = None
         self._client_tasks: set[asyncio.Task] = set()
+        self._request_semaphore: asyncio.Semaphore = asyncio.Semaphore(max_requests)
 
     @property
     def get_shutdown_event(self) -> asyncio.Event:
@@ -170,17 +173,17 @@ class ReverseProxy:
                             keepalive=self.keepalive,
                             metrics=self._metrics,
                         )
-
-                        try:
-                            keep_alive = await asyncio.wait_for(
-                                handler.handle(), timeout=self.timeouts.total_sec
-                            )
-                        except asyncio.TimeoutError:
-                            logger.warning(
-                                "Total timeout exceeded for %s",
-                                upstream_target,
-                            )
-                            break
+                        async with self._request_semaphore:
+                            try:
+                                keep_alive = await asyncio.wait_for(
+                                    handler.handle(), timeout=self.timeouts.total_sec
+                                )
+                            except asyncio.TimeoutError:
+                                logger.warning(
+                                    "Total timeout exceeded for %s",
+                                    upstream_target,
+                                )
+                                break
 
                         if writer.is_closing():
                             break
