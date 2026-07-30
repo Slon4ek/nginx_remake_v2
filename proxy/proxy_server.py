@@ -9,6 +9,7 @@ from proxy.models import KeepAliveConfig, RetryConfig
 from proxy.rate_limiter import RateLimiter
 from proxy.timeouts import Timeouts
 from proxy.upstream_pool import UpstreamsPool
+from proxy.config import ProxyConfig
 
 logger = logging.getLogger(__name__)
 
@@ -21,10 +22,10 @@ class ReverseProxy:
         upstream_pool: UpstreamsPool,
         timeouts: Timeouts,
         max_conns: int,
-        max_requests: int,
         metrics: ProxyMetrics,
         keepalive: KeepAliveConfig,
         retry_config: RetryConfig,
+        config_path: str,
         rate_limiter: RateLimiter | None = None,
     ):
         self.host = host
@@ -41,7 +42,7 @@ class ReverseProxy:
         self._metrics = metrics
         self._total_connections_semaphore: asyncio.Semaphore | None = None
         self._client_tasks: set[asyncio.Task] = set()
-        self._request_semaphore: asyncio.Semaphore = asyncio.Semaphore(max_requests)
+        self.config_path = config_path
 
     @property
     def get_shutdown_event(self) -> asyncio.Event:
@@ -58,7 +59,13 @@ class ReverseProxy:
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
             with suppress(NotImplementedError):
-                loop.add_signal_handler(sig, lambda: asyncio.create_task(self.stop()))
+                loop.add_signal_handler(sig, lambda: asyncio.create_task(self._stop()))
+
+        loop.add_signal_handler(
+            signal.SIGHUP,
+            lambda: asyncio.create_task(self._reload_config(self.config_path)),
+        )
+        logger.info("SIGHUP handler registered for hot reload")
 
         addr = self._server.sockets[0].getsockname()
         logger.info("Reverse Proxy запущен и слушает на %s:%d", *addr)
@@ -66,7 +73,55 @@ class ReverseProxy:
         async with self._server:
             await self._shutdown_event.wait()
 
-    async def stop(self):
+    async def _reload_config(self, config_path: str):
+        """
+        Перечитывает config.yaml на лету.
+
+        Меняет:
+          - timeouts
+          - limits
+          - upstream список (пересоздаёт под-пулы)
+          - keepalive
+          - rate limiter
+
+        Не меняет (требуют рестарта):
+          - listen (адрес/порт)
+          - tls (сертификаты)
+        """
+        logger.info("SIGHUP получен. Перезагрузка конфигурации...")
+
+        try:
+            new_config = ProxyConfig.from_yaml(config_path)
+
+            self.timeouts = new_config.timeouts
+            self.max_conns = new_config.limits.max_client_conns
+            self.keepalive = new_config.keep_alive
+
+            await self.pool.shutdown()
+
+            new_pool = UpstreamsPool(
+                upstreams=new_config.upstreams,
+                timeouts=new_config.timeouts,
+                max_conns_per_upstream=new_config.limits.max_conns_per_upstream,
+                cb_config=new_config.circuit_breaker,
+                upstream_keepalive=new_config.upstream_keepalive,
+            )
+            self.pool = new_pool
+
+            self.rate_limiter = new_config.rate_limit
+
+            logger.info(
+                "Конфигурация перезагружена: %d upstream'ов, keep-alive=%s, timeouts=%s",
+                len(new_config.upstreams),
+                new_config.keep_alive.enabled,
+                new_config.timeouts,
+            )
+
+        except Exception as e:
+            logger.error("Ошибка перезагрузки конфигурации: %s", e)
+            logger.exception("Stack trace:")
+
+    async def _stop(self):
         """
         Graceful shutdown:
         1. Прекратить приём новых соединений
@@ -175,17 +230,16 @@ class ReverseProxy:
                             metrics=self._metrics,
                             retry_config=self.retry_config,
                         )
-                        async with self._request_semaphore:
-                            try:
-                                keep_alive = await asyncio.wait_for(
-                                    handler.handle(), timeout=self.timeouts.total_sec
-                                )
-                            except asyncio.TimeoutError:
-                                logger.warning(
-                                    "Total timeout exceeded for %s",
-                                    upstream_target,
-                                )
-                                break
+                        try:
+                            keep_alive = await asyncio.wait_for(
+                                handler.handle(), timeout=self.timeouts.total_sec
+                            )
+                        except asyncio.TimeoutError:
+                            logger.warning(
+                                "Total timeout exceeded for %s",
+                                upstream_target,
+                            )
+                            break
 
                         if writer.is_closing():
                             break
@@ -204,6 +258,26 @@ class ReverseProxy:
                     await self._close_writer(writer)
         finally:
             self._client_tasks.discard(task)
+
+    async def periodic_healthcheck(self, interval_sec: float) -> None:
+        while not self._shutdown_event.is_set():
+            try:
+                await self.pool.run_initial_healthcheck()
+                await asyncio.sleep(interval_sec)
+            except asyncio.CancelledError:
+                logger.info("Periodic healthcheck cancelled")
+                break
+
+
+    async def reap_idle_connections(self, interval_sec: float) -> None:
+        while not self._shutdown_event.is_set():
+            try:
+                for pool in self.pool.per_upstream_pools.values():
+                    await pool.close_idle()
+                await asyncio.sleep(interval_sec)
+            except asyncio.CancelledError:
+                logger.info("Periodic idle connection cancelled")
+                break
 
     # ─── Отправка ошибок клиенту ─────────────────────────────
 

@@ -85,11 +85,11 @@ class PooledConnection:
 
 class PerUpstreamPool:
     def __init__(
-        self,
-        upstream: Upstream,
-        timeouts: Timeouts,
-        max_conns: int,
-        keepalive_cfg: UpstreamKeepAliveConfig,
+            self,
+            upstream: Upstream,
+            timeouts: Timeouts,
+            max_conns: int,
+            keepalive_cfg: UpstreamKeepAliveConfig,
     ):
         self._upstream = upstream
         self._timeouts = timeouts
@@ -112,8 +112,8 @@ class PerUpstreamPool:
                     candidate = self._idle.popleft()
 
                     if (
-                        candidate.is_closed
-                        or candidate.request_count >= self._keepalive_cfg.max_requests
+                            candidate.is_closed
+                            or candidate.request_count >= self._keepalive_cfg.max_requests
                     ):
                         to_close.append(candidate)
                         continue
@@ -180,7 +180,7 @@ class PerUpstreamPool:
             while self._idle:
                 conn = self._idle.popleft()
                 if conn.is_closed or (
-                    now - conn.last_used > self._keepalive_cfg.idle_timeout_sec
+                        now - conn.last_used > self._keepalive_cfg.idle_timeout_sec
                 ):
                     await conn.close()
                 else:
@@ -201,13 +201,13 @@ class PerUpstreamPool:
 
 class UpstreamsPool:
     def __init__(
-        self,
-        upstreams: list[Upstream],
-        timeouts: Timeouts,
-        max_conns_per_upstream: int,
-        cb_config: CircuitBreakerConfig | None = None,
-        upstream_keepalive: UpstreamKeepAliveConfig | None = None,
-        max_concurrent_healthcheck: int = 5,
+            self,
+            upstreams: list[Upstream],
+            timeouts: Timeouts,
+            max_conns_per_upstream: int,
+            cb_config: CircuitBreakerConfig | None = None,
+            upstream_keepalive: UpstreamKeepAliveConfig | None = None,
+            max_concurrent_healthcheck: int = 5,
     ):
         self._validate_init_params(upstreams, max_conns_per_upstream)
 
@@ -231,7 +231,7 @@ class UpstreamsPool:
             self._breakers = {u: CircuitBreaker(cb_config) for u in self._upstreams}
 
     def _validate_init_params(
-        self, upstreams: list[Upstream], max_conns_per_upstream: int
+            self, upstreams: list[Upstream], max_conns_per_upstream: int
     ) -> None:
         if not upstreams:
             raise ValueError("At least one upstream is required")
@@ -267,7 +267,7 @@ class UpstreamsPool:
             await pool.release(conn)
 
     async def get_next_alive(
-        self, excluded: set[Upstream] | None = None
+            self, excluded: set[Upstream] | None = None
     ) -> Upstream | None:
         excluded = excluded or set()
         async with self._lock:
@@ -377,30 +377,6 @@ class UpstreamsPool:
         tasks = [self.healthcheck(u) for u in self._upstreams]
         await asyncio.gather(*tasks, return_exceptions=True)
 
-    async def periodic_healthcheck(
-        self, interval_sec: float, stop_event: asyncio.Event
-    ) -> None:
-        while not stop_event.is_set() and not self._shutdown:
-            try:
-                await self.run_initial_healthcheck()
-                await asyncio.sleep(interval_sec)
-            except asyncio.CancelledError:
-                logger.info("Periodic healthcheck cancelled")
-                break
-            except Exception:
-                logger.exception("Periodic healthcheck error")
-
-    async def reap_idle_connections(
-        self, interval_sec: float, stop_event: asyncio.Event
-    ):
-        while not stop_event.is_set() and not self._shutdown:
-            try:
-                for pool in self._per_upstream_pools.values():
-                    await pool.close_idle()
-                await asyncio.sleep(interval_sec)
-            except asyncio.CancelledError:
-                break
-
     async def shutdown(self) -> None:
         logger.info("Starting upstream pool shutdown...")
         self._shutdown = True
@@ -413,3 +389,7 @@ class UpstreamsPool:
             self._status.clear()
 
         logger.info("Upstream pool shutdown complete")
+
+    @property
+    def per_upstream_pools(self):
+        return self._per_upstream_pools
