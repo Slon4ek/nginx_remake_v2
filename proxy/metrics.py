@@ -1,9 +1,11 @@
 import asyncio
+import logging
 from collections import defaultdict
 from dataclasses import dataclass, field
 
 from aiohttp import web
 
+logger = logging.getLogger(__name__)
 
 @dataclass
 class ProxyMetrics:
@@ -88,3 +90,27 @@ def create_app(metrics: ProxyMetrics) -> web.Application:
     app = web.Application()
     app.router.add_get("/metrics", metrics_handler)
     return app
+
+
+async def run_metrics_server(
+    host: str,
+    port: int,
+    metrics: ProxyMetrics,
+    shutdown_event: asyncio.Event,
+):
+    """
+    Отдельный HTTP-сервер для /metrics на aiohttp.
+    Живёт пока жив proxy — shutdown_event завершает его при stop().
+    """
+    app = create_app(metrics)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, host, port)
+    await site.start()
+    logger.info("Metrics server started on %s:%d", host, port)
+    try:
+        await shutdown_event.wait()
+    except asyncio.CancelledError:
+        pass
+    finally:
+        await runner.cleanup()
