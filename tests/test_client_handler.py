@@ -1,7 +1,9 @@
+# Standard Library
 import asyncio
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock
 
+# Project Modules
 from proxy.client_handler import ClientHandler
 from proxy.metrics import ProxyMetrics
 from proxy.models import KeepAliveConfig, RetryConfig, Upstream
@@ -42,13 +44,10 @@ def _make_pool(*upstream_responses: bytes):
             self._call_index = 0
 
         @asynccontextmanager
-        async def acquire_connection(self, upstream):
+        async def acquire_connection(self, _upstream):
             idx = self._call_index
             self._call_index += 1
-            if idx < len(self._responses):
-                resp = self._responses[idx]
-            else:
-                resp = b""
+            resp = self._responses[idx] if idx < len(self._responses) else b""
             reader = asyncio.StreamReader()
             reader.feed_data(resp)
             reader.feed_eof()
@@ -129,11 +128,7 @@ class TestClientHandler:
 
     async def test_post_200_with_body(self):
         body = b"payload"
-        req = (
-            b"POST /echo HTTP/1.1\r\n"
-            b"Host: x\r\n"
-            b"Content-Length: %d\r\n\r\n%s" % (len(body), body)
-        )
+        req = b"POST /echo HTTP/1.1\r\nHost: x\r\nContent-Length: %d\r\n\r\n%s" % (len(body), body)
         resp = b"HTTP/1.1 200 OK\r\nContent-Length: 7\r\n\r\npayload"
         handler, pool, _ = make_handler(req, resp)
         ka = await handler.handle()
@@ -264,13 +259,15 @@ class TestClientHandler:
         class _RaisingCtx:
             async def __aenter__(self):
                 raise ConnectionRefusedError
+
             async def __aexit__(self, *args):
                 pass
 
         class RaisingPool:
             record_success = AsyncMock()
             record_failure = AsyncMock()
-            def acquire_connection(self, upstream):
+
+            def acquire_connection(self, _upstream):
                 return _RaisingCtx()
 
         pool = RaisingPool()
@@ -307,7 +304,7 @@ class TestClientHandler:
             record_failure = AsyncMock()
 
             @asynccontextmanager
-            async def acquire_connection(self, upstream):
+            async def acquire_connection(self, _upstream):
                 reader = asyncio.StreamReader()
                 writer = _make_writer()
                 yield MockPooledConnection(reader, writer)
@@ -416,13 +413,15 @@ class TestClientHandler:
         class _RaisingCtx:
             async def __aenter__(self):
                 raise ConnectionRefusedError
+
             async def __aexit__(self, *args):
                 pass
 
         class RaisingPool:
             record_success = AsyncMock()
             record_failure = AsyncMock()
-            def acquire_connection(self, upstream):
+
+            def acquire_connection(self, _upstream):
                 return _RaisingCtx()
 
         pool = RaisingPool()
@@ -453,7 +452,7 @@ class TestClientHandler:
             record_failure = AsyncMock()
 
             @asynccontextmanager
-            async def acquire_connection(self, upstream):
+            async def acquire_connection(self, _upstream):
                 reader = asyncio.StreamReader()
                 writer = _make_writer()
                 yield MockPooledConnection(reader, writer)

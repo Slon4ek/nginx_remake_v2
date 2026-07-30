@@ -1,7 +1,10 @@
+# Standard Library
 import asyncio
 
+# Third Party
 import pytest
 
+# Project Modules
 from proxy.config import RateLimitConfig
 from proxy.rate_limiter import RateLimiter, TokenBucket
 
@@ -42,7 +45,6 @@ class TestTokenBucket:
 
         await bucket.consume()
         await bucket.consume()
-        # bucket.tokens == 0
 
         await asyncio.sleep(1)  # 1 сек * 1000 = 1000 токенов, но burst=2
 

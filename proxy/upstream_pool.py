@@ -1,3 +1,4 @@
+# Standard Library
 import asyncio
 import logging
 import socket
@@ -6,6 +7,7 @@ import time
 from collections import deque
 from contextlib import asynccontextmanager, suppress
 
+# Project Modules
 from proxy.models import CircuitBreakerConfig, Upstream, UpstreamKeepAliveConfig
 from proxy.timeouts import Timeouts
 
@@ -85,11 +87,11 @@ class PooledConnection:
 
 class PerUpstreamPool:
     def __init__(
-            self,
-            upstream: Upstream,
-            timeouts: Timeouts,
-            max_conns: int,
-            keepalive_cfg: UpstreamKeepAliveConfig,
+        self,
+        upstream: Upstream,
+        timeouts: Timeouts,
+        max_conns: int,
+        keepalive_cfg: UpstreamKeepAliveConfig,
     ):
         self._upstream = upstream
         self._timeouts = timeouts
@@ -112,8 +114,8 @@ class PerUpstreamPool:
                     candidate = self._idle.popleft()
 
                     if (
-                            candidate.is_closed
-                            or candidate.request_count >= self._keepalive_cfg.max_requests
+                        candidate.is_closed
+                        or candidate.request_count >= self._keepalive_cfg.max_requests
                     ):
                         to_close.append(candidate)
                         continue
@@ -126,9 +128,7 @@ class PerUpstreamPool:
                     break
 
             if to_close:
-                await asyncio.gather(
-                    *(c.close() for c in to_close), return_exceptions=True
-                )
+                await asyncio.gather(*(c.close() for c in to_close), return_exceptions=True)
 
             if conn is not None:
                 conn.last_used = now
@@ -137,9 +137,7 @@ class PerUpstreamPool:
 
             ssl_context = ssl.create_default_context() if self._upstream.tls else None
             reader, writer = await self._timeouts.wait_for_connection(
-                asyncio.open_connection(
-                    self._upstream.host, self._upstream.port, ssl=ssl_context
-                )
+                asyncio.open_connection(self._upstream.host, self._upstream.port, ssl=ssl_context)
             )
             conn = PooledConnection(reader, writer)
             conn.last_used = now
@@ -179,9 +177,7 @@ class PerUpstreamPool:
             keep = deque()
             while self._idle:
                 conn = self._idle.popleft()
-                if conn.is_closed or (
-                        now - conn.last_used > self._keepalive_cfg.idle_timeout_sec
-                ):
+                if conn.is_closed or (now - conn.last_used > self._keepalive_cfg.idle_timeout_sec):
                     await conn.close()
                 else:
                     keep.append(conn)
@@ -193,27 +189,25 @@ class PerUpstreamPool:
             to_close.extend(self._idle)
             self._idle.clear()
         if to_close:
-            await asyncio.gather(
-                *(conn.close() for conn in to_close), return_exceptions=True
-            )
+            await asyncio.gather(*(conn.close() for conn in to_close), return_exceptions=True)
             logger.debug(f"Force-closed {len(to_close)} idle connections")
 
 
 class UpstreamsPool:
     def __init__(
-            self,
-            upstreams: list[Upstream],
-            timeouts: Timeouts,
-            max_conns_per_upstream: int,
-            cb_config: CircuitBreakerConfig | None = None,
-            upstream_keepalive: UpstreamKeepAliveConfig | None = None,
-            max_concurrent_healthcheck: int = 5,
+        self,
+        upstreams: list[Upstream],
+        timeouts: Timeouts,
+        max_conns_per_upstream: int,
+        cb_config: CircuitBreakerConfig | None = None,
+        upstream_keepalive: UpstreamKeepAliveConfig | None = None,
+        max_concurrent_healthcheck: int = 5,
     ):
         self._validate_init_params(upstreams, max_conns_per_upstream)
 
         self._upstreams = list(upstreams)
         self._next_index = 0
-        self._status: dict[Upstream, bool] = {u: True for u in self._upstreams}
+        self._status: dict[Upstream, bool] = dict.fromkeys(self._upstreams, True)
         self._timeouts = timeouts
         self._lock = asyncio.Lock()
         self._healthcheck_semaphore = asyncio.Semaphore(max_concurrent_healthcheck)
@@ -230,9 +224,7 @@ class UpstreamsPool:
         if cb_config:
             self._breakers = {u: CircuitBreaker(cb_config) for u in self._upstreams}
 
-    def _validate_init_params(
-            self, upstreams: list[Upstream], max_conns_per_upstream: int
-    ) -> None:
+    def _validate_init_params(self, upstreams: list[Upstream], max_conns_per_upstream: int) -> None:
         if not upstreams:
             raise ValueError("At least one upstream is required")
         if max_conns_per_upstream <= 0:
@@ -266,9 +258,7 @@ class UpstreamsPool:
         finally:
             await pool.release(conn)
 
-    async def get_next_alive(
-            self, excluded: set[Upstream] | None = None
-    ) -> Upstream | None:
+    async def get_next_alive(self, excluded: set[Upstream] | None = None) -> Upstream | None:
         excluded = excluded or set()
         async with self._lock:
             count = len(self._upstreams)
@@ -284,9 +274,7 @@ class UpstreamsPool:
 
                 breaker = self._breakers.get(upstream)
                 if breaker and not breaker.allow_request():
-                    logger.debug(
-                        "Circuit breaker not allowed %s %s", upstream, breaker.state
-                    )
+                    logger.debug("Circuit breaker not allowed %s %s", upstream, breaker.state)
                     continue
 
                 return upstream
@@ -325,9 +313,7 @@ class UpstreamsPool:
 
             try:
                 _, writer = await asyncio.wait_for(
-                    asyncio.open_connection(
-                        upstream.host, upstream.port, ssl=ssl_context
-                    ),
+                    asyncio.open_connection(upstream.host, upstream.port, ssl=ssl_context),
                     timeout=self._timeouts.connect_sec,
                 )
                 writer.close()
@@ -337,7 +323,7 @@ class UpstreamsPool:
                 logger.debug("Healthcheck OK for %s", addr)
                 return True
 
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning(
                     "Healthcheck timeout for %s (connect timeout %.2f s)",
                     addr,

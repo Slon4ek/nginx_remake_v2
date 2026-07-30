@@ -1,7 +1,10 @@
+# Standard Library
 import asyncio
 
+# Third Party
 import pytest
 
+# Project Modules
 from proxy.buffered_reader import UnreadableStreamReader
 
 

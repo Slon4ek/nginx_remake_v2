@@ -1,6 +1,9 @@
+# Standard Library
 import asyncio
 import logging
+from contextlib import suppress
 
+# Project Modules
 from proxy.config import ProxyConfig
 from proxy.logger import LoggingConfigurator
 from proxy.metrics import ProxyMetrics, run_metrics_server
@@ -62,8 +65,7 @@ async def main():
 
     logger.info("Reverse Proxy завершил работу")
 
+
 if __name__ == "__main__":
-    try:
+    with suppress(KeyboardInterrupt):
         asyncio.run(main())
-    except KeyboardInterrupt:
-        pass

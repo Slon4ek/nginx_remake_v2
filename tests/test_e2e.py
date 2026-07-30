@@ -1,9 +1,12 @@
+# Standard Library
 import asyncio
 import socket
 from unittest.mock import patch
 
+# Third Party
 import pytest
 
+# Project Modules
 from proxy.metrics import ProxyMetrics
 from proxy.models import (
     CircuitBreakerConfig,
@@ -51,7 +54,7 @@ async def _read_http_response(reader, timeout=5.0):
             if not chunk:
                 break
             body += chunk
-    except (asyncio.TimeoutError, ConnectionError):
+    except (TimeoutError, ConnectionError):
         pass
     return raw_headers.encode() + body
 
@@ -99,16 +102,10 @@ pytestmark = pytest.mark.e2e
 
 
 class TestE2E:
-
     async def test_get_request(self):
         async def upstream(reader, writer):
             await asyncio.wait_for(reader.read(65536), timeout=2.0)
-            writer.write(
-                b"HTTP/1.1 200 OK\r\n"
-                b"Content-Length: 12\r\n"
-                b"\r\n"
-                b"Hello World!"
-            )
+            writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: 12\r\n\r\nHello World!")
             await writer.drain()
             writer.close()
 
@@ -134,11 +131,7 @@ class TestE2E:
             data = await asyncio.wait_for(reader.read(65536), timeout=2.0)
             body_start = data.find(b"\r\n\r\n") + 4
             body = data[body_start:]
-            resp = (
-                b"HTTP/1.1 200 OK\r\n"
-                b"Content-Length: %d\r\n"
-                b"\r\n" % (len(body),)
-            ) + body
+            resp = (b"HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n" % (len(body),)) + body
             writer.write(resp)
             await writer.drain()
             writer.close()
@@ -151,12 +144,9 @@ class TestE2E:
             try:
                 r, w = await asyncio.open_connection("127.0.0.1", proxy_port)
                 payload = b"hello=world"
-                req = (
-                    b"POST /echo HTTP/1.1\r\n"
-                    b"Host: x\r\n"
-                    b"Content-Length: %d\r\n"
-                    b"\r\n"
-                    b"%s" % (len(payload), payload)
+                req = b"POST /echo HTTP/1.1\r\nHost: x\r\nContent-Length: %d\r\n\r\n%s" % (
+                    len(payload),
+                    payload,
                 )
                 w.write(req)
                 await w.drain()
@@ -256,12 +246,7 @@ class TestE2E:
         async def upstream(reader, writer):
             await asyncio.wait_for(reader.read(65536), timeout=2.0)
 
-            writer.write(
-                b"HTTP/1.1 200 OK\r\n"
-                b"Content-Length: 12\r\n"
-                b"\r\n"
-                b"Hello World!"
-            )
+            writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: 12\r\n\r\nHello World!")
             await writer.drain()
             writer.close()
 

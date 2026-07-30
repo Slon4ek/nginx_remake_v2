@@ -1,3 +1,4 @@
+# Standard Library
 import asyncio
 from collections.abc import Coroutine
 from dataclasses import dataclass, field
@@ -32,23 +33,23 @@ class Timeouts:
     async def wait_for_connection(self, coro: Coroutine[Any, Any, T]) -> T:
         try:
             return await asyncio.wait_for(coro, timeout=self.connect_sec)
-        except asyncio.TimeoutError:
-            raise asyncio.TimeoutError("Connection timed out") from None
+        except TimeoutError:
+            raise TimeoutError("Connection timed out") from None
 
     async def wait_for_read(self, coro: Coroutine[Any, Any, T]) -> T:
         try:
             return await asyncio.wait_for(coro, timeout=self.read_sec)
-        except asyncio.TimeoutError:
-            raise asyncio.TimeoutError("Read timed out") from None
+        except TimeoutError:
+            raise TimeoutError("Read timed out") from None
 
     async def wait_for_write(self, coro: Coroutine[Any, Any, T]) -> T:
         try:
             return await asyncio.wait_for(coro, timeout=self.write_sec)
-        except asyncio.TimeoutError:
-            raise asyncio.TimeoutError("Write timed out") from None
+        except TimeoutError:
+            raise TimeoutError("Write timed out") from None
 
     async def wait_for_total(self, coro: Coroutine[Any, Any, T]) -> T:
         try:
             return await asyncio.wait_for(coro, timeout=self.total_sec)
-        except asyncio.TimeoutError:
-            raise asyncio.TimeoutError("Total timed out") from None
+        except TimeoutError:
+            raise TimeoutError("Total timed out") from None

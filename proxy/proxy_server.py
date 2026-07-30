@@ -1,15 +1,17 @@
+# Standard Library
 import asyncio
 import logging
 import signal
 from contextlib import suppress
 
+# Project Modules
 from proxy.client_handler import ClientHandler
+from proxy.config import ProxyConfig
 from proxy.metrics import ProxyMetrics
 from proxy.models import KeepAliveConfig, RetryConfig
 from proxy.rate_limiter import RateLimiter
 from proxy.timeouts import Timeouts
 from proxy.upstream_pool import UpstreamsPool
-from proxy.config import ProxyConfig
 
 logger = logging.getLogger(__name__)
 
@@ -52,9 +54,7 @@ class ReverseProxy:
         """Запускает TCP-сервер и ждёт сигнала остановки."""
         self._total_connections_semaphore = asyncio.Semaphore(self.max_conns)
 
-        self._server = await asyncio.start_server(
-            self.handle_connection, self.host, self.port
-        )
+        self._server = await asyncio.start_server(self.handle_connection, self.host, self.port)
 
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
@@ -154,9 +154,7 @@ class ReverseProxy:
             await asyncio.sleep(0.1)
 
         if self._metrics.active_connections > 0:
-            logger.warning(
-                "Не все соединения закрылись плавно, принудительно завершаем работу"
-            )
+            logger.warning("Не все соединения закрылись плавно, принудительно завершаем работу")
             for task in self._client_tasks:
                 if not task.done():
                     task.cancel()
@@ -168,9 +166,7 @@ class ReverseProxy:
         self._shutdown_event.set()
         logger.info("Reverse Proxy успешно остановлен")
 
-    async def handle_connection(
-        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
-    ):
+    async def handle_connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         """
         Принимает TCP-соединение от клиента.
         Если keep-alive включён — обрабатывает несколько
@@ -234,7 +230,7 @@ class ReverseProxy:
                             keep_alive = await asyncio.wait_for(
                                 handler.handle(), timeout=self.timeouts.total_sec
                             )
-                        except asyncio.TimeoutError:
+                        except TimeoutError:
                             logger.warning(
                                 "Total timeout exceeded for %s",
                                 upstream_target,
@@ -267,7 +263,6 @@ class ReverseProxy:
             except asyncio.CancelledError:
                 logger.info("Periodic healthcheck cancelled")
                 break
-
 
     async def reap_idle_connections(self, interval_sec: float) -> None:
         while not self._shutdown_event.is_set():

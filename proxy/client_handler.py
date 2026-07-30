@@ -1,9 +1,11 @@
+# Standard Library
 import asyncio
 import errno
 import logging
 import time
 from contextlib import suppress
 
+# Project Modules
 from proxy.buffered_reader import UnreadableStreamReader
 from proxy.http_parser import (
     BodyStreamer,
@@ -92,10 +94,13 @@ class ClientHandler:
 
                     self._status_code = resp_meta.status_code
                     if self._should_retry(req_meta.method, resp_meta) and attempt < max_retries:
-                        delay = min(base_delay * (2 ** attempt), max_delay)
+                        delay = min(base_delay * (2**attempt), max_delay)
                         logger.warning(
                             "Attempt %d/%d for %s, retry in %.1fs",
-                            attempt + 1, max_retries, self.upstream, delay,
+                            attempt + 1,
+                            max_retries,
+                            self.upstream,
+                            delay,
                         )
                         await asyncio.sleep(delay)
                         continue
@@ -120,10 +125,8 @@ class ClientHandler:
                         up_reader, self.client_writer, resp_meta.headers
                     )
 
-            except asyncio.TimeoutError as e:
-                logger.warning(
-                    "Сетевая операция с %s прервана по таймауту: %s", self.upstream, e
-                )
+            except TimeoutError as e:
+                logger.warning("Сетевая операция с %s прервана по таймауту: %s", self.upstream, e)
                 await self._send_504_gateway_timeout()
                 keep_alive = False
                 self._successful_request = False
@@ -133,9 +136,7 @@ class ClientHandler:
                 keep_alive = False
                 self._successful_request = False
             except (ConnectionRefusedError, ConnectionResetError) as e:
-                logger.error(
-                    "Апстрим %s отклонил или сбросил соединение: %s", self.upstream, e
-                )
+                logger.error("Апстрим %s отклонил или сбросил соединение: %s", self.upstream, e)
                 await self._send_502_bad_gateway()
                 keep_alive = False
                 self._successful_request = False
@@ -147,9 +148,7 @@ class ClientHandler:
                 keep_alive = False
                 self._successful_request = False
             except RuntimeError as e:
-                logger.error(
-                    "Запрос отклонен: пул апстримов перегружен или закрывается: %s", e
-                )
+                logger.error("Запрос отклонен: пул апстримов перегружен или закрывается: %s", e)
                 await self._send_503_service_unavailable()
                 keep_alive = False
                 self._successful_request = False
@@ -183,9 +182,7 @@ class ClientHandler:
         body_remainder = b""
 
         while not req_parser.headers_done:
-            chunk = await self.timeouts.wait_for_read(
-                self.client_reader.read(self.chunk_size)
-            )
+            chunk = await self.timeouts.wait_for_read(self.client_reader.read(self.chunk_size))
             if not chunk:
                 return None
             request_meta, body_remainder = req_parser.feed(chunk)
@@ -240,9 +237,7 @@ class ClientHandler:
             return req.headers.get("connection", "").lower() == "keep-alive"
         return False
 
-    def _modify_request_headers(
-        self, req: HttpRequest, keep_alive: bool
-    ) -> HttpRequest:
+    def _modify_request_headers(self, req: HttpRequest, keep_alive: bool) -> HttpRequest:
         h = dict(req.headers)
         peer = self.client_writer.get_extra_info("peername")
         if peer:
@@ -254,9 +249,7 @@ class ClientHandler:
         h["connection"] = "keep-alive" if keep_alive else "close"
         return HttpRequest(req.method, req.path, req.version, h)
 
-    def _modify_response_headers(
-        self, resp: HttpResponse, keep_alive: bool
-    ) -> HttpResponse:
+    def _modify_response_headers(self, resp: HttpResponse, keep_alive: bool) -> HttpResponse:
         h = dict(resp.headers)
         h["via"] = "1.1 nginx_remake"
         h["connection"] = "keep-alive" if keep_alive else "close"
@@ -266,14 +259,10 @@ class ClientHandler:
         await self._write_error_response(b"502", b"Bad Gateway", b"502 Bad Gateway")
 
     async def _send_503_service_unavailable(self):
-        await self._write_error_response(
-            b"503", b"Service Unavailable", b"503 Service Unavailable"
-        )
+        await self._write_error_response(b"503", b"Service Unavailable", b"503 Service Unavailable")
 
     async def _send_504_gateway_timeout(self):
-        await self._write_error_response(
-            b"504", b"Gateway Timeout", b"504 Gateway Timeout"
-        )
+        await self._write_error_response(b"504", b"Gateway Timeout", b"504 Gateway Timeout")
 
     async def _write_error_response(
         self, status_bytes: bytes, reason_bytes: bytes, body_bytes: bytes

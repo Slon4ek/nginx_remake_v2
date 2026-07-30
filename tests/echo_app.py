@@ -5,6 +5,7 @@ Endpoints:
     POST /echo   — возвращает тело запроса как ответ
 """
 
+# Third Party
 from fastapi import FastAPI, HTTPException, Request
 
 app = FastAPI()
@@ -12,7 +13,6 @@ app = FastAPI()
 
 @app.get("/")
 async def root():
-    print("Hello World")
     return {"message": "Hello World"}
 
 
@@ -20,6 +20,7 @@ async def root():
 async def echo(request: Request):
     body = await request.body()
     return body
+
 
 @app.get("/always_500")
 async def always_500():

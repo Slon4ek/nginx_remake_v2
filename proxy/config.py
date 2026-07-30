@@ -1,9 +1,12 @@
+# Standard Library
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import TypeVar
 
+# Third Party
 import yaml
 
+# Project Modules
 from proxy.models import (
     CircuitBreakerConfig,
     KeepAliveConfig,
@@ -22,9 +25,7 @@ T = TypeVar("T")
 
 def load_dataclass(cls: type[T], data: dict, prefix: str = "") -> T:
     if not isinstance(data, dict):
-        raise TypeError(
-            f"'{prefix}' must be an object" if prefix else "Data must be an object"
-        )
+        raise TypeError(f"'{prefix}' must be an object" if prefix else "Data must be an object")
 
     kwargs = {}
     for f in fields(cls):
@@ -63,9 +64,7 @@ class ProxyConfig:
     limits: Limits = field(default_factory=Limits)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     keep_alive: KeepAliveConfig = field(default_factory=KeepAliveConfig)
-    upstream_keepalive: UpstreamKeepAliveConfig = field(
-        default_factory=UpstreamKeepAliveConfig
-    )
+    upstream_keepalive: UpstreamKeepAliveConfig = field(default_factory=UpstreamKeepAliveConfig)
     circuit_breaker: CircuitBreakerConfig = field(default_factory=CircuitBreakerConfig)
     retry: RetryConfig = field(default_factory=RetryConfig)
     rate_limit: RateLimitConfig = field(default_factory=RateLimitConfig)
@@ -97,9 +96,7 @@ class ProxyConfig:
             if not host or not isinstance(host, str):
                 raise ValueError(f"Upstream at index {i} missing valid 'host'")
             if port is None or not isinstance(port, int) or port < 1 or port > 65535:
-                raise ValueError(
-                    f"Upstream at index {i} missing valid 'port' (1–65535)"
-                )
+                raise ValueError(f"Upstream at index {i} missing valid 'port' (1–65535)")
             tls = bool(u.get("tls", False))
             upstreams.append(Upstream(host=host, port=port, tls=tls))
 
@@ -116,14 +113,10 @@ class ProxyConfig:
         keep_alive = load_dataclass(KeepAliveConfig, raw_ka, "keep_alive")
 
         raw_uk = data.get("upstream_keepalive", {})
-        upstream_keepalive = load_dataclass(
-            UpstreamKeepAliveConfig, raw_uk, "upstream_keepalive"
-        )
+        upstream_keepalive = load_dataclass(UpstreamKeepAliveConfig, raw_uk, "upstream_keepalive")
 
         raw_cb = data.get("circuit_breaker", {})
-        circuit_breaker = load_dataclass(
-            CircuitBreakerConfig, raw_cb, "circuit_breaker"
-        )
+        circuit_breaker = load_dataclass(CircuitBreakerConfig, raw_cb, "circuit_breaker")
 
         raw_retry = data.get("retry", {})
         retry = load_dataclass(RetryConfig, raw_retry, "retry")

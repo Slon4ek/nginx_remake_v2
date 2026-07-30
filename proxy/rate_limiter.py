@@ -1,3 +1,4 @@
+# Standard Library
 import asyncio
 import time
 
@@ -42,9 +43,7 @@ class RateLimiter:
         if self.config.per_client and client_ip:
             async with self._lock:
                 if client_ip not in self._per_client:
-                    self._per_client[client_ip] = TokenBucket(
-                        self.config.rate, self.config.burst
-                    )
+                    self._per_client[client_ip] = TokenBucket(self.config.rate, self.config.burst)
                 bucket = self._per_client[client_ip]
             return await bucket.consume()
 

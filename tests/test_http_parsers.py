@@ -1,3 +1,4 @@
+# Project Modules
 from proxy.http_parser import HttpRequestParser, HttpResponseParser
 
 
@@ -167,9 +168,7 @@ class TestHttpResponseParser:
     def test_headers_lowercased(self):
         """Имена заголовков в lower-case."""
         parser = HttpResponseParser()
-        data = (
-            b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nX-Rate-Limit: 100\r\n\r\n"
-        )
+        data = b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nX-Rate-Limit: 100\r\n\r\n"
         resp, _ = parser.feed(data)
 
         assert "content-type" in resp.headers

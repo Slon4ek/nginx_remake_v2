@@ -1,0 +1,111 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nginx_remake"
+version = "0.1.0"
+description = "Async reverse HTTP proxy on Python"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+keywords = ["http-proxy", "reverse-proxy", "asyncio", "uvloop"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Internet :: Proxy Servers",
+]
+dependencies = [
+    "aiohttp>=3.9",
+    "pyyaml>=6.0",
+    "uvloop>=0.19",
+]
+
+[project.urls]
+Homepage = "https://github.com/slon4ek/nginx_remake_v2"
+Source = "https://github.com/slon4ek/nginx_remake_v2"
+BugTracker = "https://github.com/slon4ek/nginx_remake_v2/issues"
+
+[project.optional-dependencies]
+dev = [
+    "httpx>=0.26",
+    "pytest-asyncio>=0.25",
+    "pytest>=8.0",
+]
+lint = [
+    "ruff>=0.16",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+markers = [
+    "integration: marks tests as integration tests (require external services)",
+    "e2e: marks tests as end-to-end tests (real proxy + upstream servers)",
+]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+exclude = [
+    ".venv",
+    ".git",
+    "__pycache__",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".idea",
+    "dist",
+    "build",
+    "*.egg-info",
+]
+
+[tool.ruff.lint]
+select = [
+    "E", "W", "F",   # pycodestyle + pyflakes
+    "I",             # isort
+    "UP",            # pyupgrade
+    "B",             # flake8-bugbear
+    "C4", "SIM",     # comprehensions, simplify
+    "T20",           # flake8-print
+    "ARG",           # flake8-unused-arguments
+    "ERA",           # eradicate (commented-out code)
+]
+ignore = [
+    "E501",   # line too long (handled by formatter)
+    "B008",   # function calls in default args (acceptable for our use)
+    "ARG001", # unused function argument (common in handlers)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*.py" = [
+    "S101", "S106", "S107",        # assertions in tests
+    "D100", "D101", "D103", "D104",  # no docstrings in tests
+    "FBT001", "FBT002", "FBT003",    # boolean args in tests
+]
+
+[tool.ruff.format]
+quote-style = "double"
+docstring-code-format = true
+preview = false
+
+[tool.ruff.lint.isort]
+known-first-party = ["proxy"]
+section-order = ["future", "standard-library", "third-party", "first-party", "local-folder"]
+combine-as-imports = true
+import-heading = { "standard-library" = "Standard Library", "third-party" = "Third Party", "first-party" = "Project Modules", "local-folder" = "Local" }
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["dict", "list", "set", "tuple"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"

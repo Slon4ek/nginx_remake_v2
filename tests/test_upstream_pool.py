@@ -1,8 +1,11 @@
+# Standard Library
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
+# Third Party
 import pytest
 
+# Project Modules
 from proxy.timeouts import Timeouts
 from proxy.upstream_pool import (
     CircuitBreaker,
@@ -84,9 +87,7 @@ class TestCircuitBreaker:
 
     @pytest.mark.asyncio
     async def test_half_open_after_cooldown(self):
-        cb = CircuitBreaker(
-            CircuitBreakerConfig(failure_threshold=1, cooldown_sec=0.05)
-        )
+        cb = CircuitBreaker(CircuitBreakerConfig(failure_threshold=1, cooldown_sec=0.05))
         await cb.record_failure()
         assert cb.allow_request() is False
         await asyncio.sleep(0.06)
@@ -94,9 +95,7 @@ class TestCircuitBreaker:
 
     @pytest.mark.asyncio
     async def test_closes_after_success_in_half_open(self):
-        cb = CircuitBreaker(
-            CircuitBreakerConfig(failure_threshold=1, cooldown_sec=0.05)
-        )
+        cb = CircuitBreaker(CircuitBreakerConfig(failure_threshold=1, cooldown_sec=0.05))
         await cb.record_failure()
         await asyncio.sleep(0.06)
         cb.allow_request()
@@ -141,9 +140,7 @@ class TestAcquireRelease:
         """acquire_connection возвращает рабочее соединение."""
         u = Upstream("127.0.0.1", 9001)
 
-        with patch(
-            "asyncio.open_connection", new=AsyncMock(return_value=mock_connection)
-        ):
+        with patch("asyncio.open_connection", new=AsyncMock(return_value=mock_connection)):
             async with pool.acquire_connection(u) as conn:
                 assert conn is not None
                 assert not conn.is_closed
@@ -234,6 +231,7 @@ class TestHealthcheck:
 
 class TestStatus:
     def test_set_status_triggers_log(self, pool, caplog):
+        # Standard Library
         import logging
 
         caplog.set_level(logging.INFO)
@@ -274,7 +272,8 @@ class TestValidation:
 
 
 class TestConfigDefaults:
-    def test_all_defaults_applied(self, timeouts):
+    def test_all_defaults_applied(self, _timeouts):
+        # Project Modules
         from proxy.config import ProxyConfig
 
         # Test that defaults are correctly applied

@@ -1,7 +1,10 @@
+# Standard Library
 import asyncio
 
+# Third Party
 import pytest
 
+# Project Modules
 from proxy.buffered_reader import UnreadableStreamReader
 from proxy.http_parser import BodyStreamer, BodyStreamerError
 
@@ -108,10 +111,6 @@ class TestBodyStreamerRequest:
 
         # Форвардим как есть (включая size lines, CRLF, trailers)
         assert writer.data == chunked
-        # total = payload bytes + trailing CRLF для каждого чанка
-        # chunk1: 5 (hello) + 2 (\r\n) = 7
-        # chunk2: 6 ( world) + 2 (\r\n) = 8
-        # total = 15
         assert sent == 15
 
     async def test_stream_request_chunked_multiple_chunks(self, streamer):
@@ -124,9 +123,6 @@ class TestBodyStreamerRequest:
         sent = await streamer.stream_request(reader, writer, headers)
 
         assert writer.data == chunked
-        # chunk1: 3 + 2 = 5
-        # chunk2: 3 + 2 = 5
-        # total = 10
         assert sent == 10
 
     async def test_stream_request_chunked_with_trailer(self, streamer):
@@ -140,7 +136,6 @@ class TestBodyStreamerRequest:
         sent = await streamer.stream_request(reader, writer, headers)
 
         assert writer.data == chunked
-        # chunk1: 4 + 2 = 6
         assert sent == 6
 
     async def test_stream_request_chunked_invalid_size_line(self, streamer):
@@ -366,7 +361,6 @@ class TestBodyStreamerEdgeCases:
         headers = {"transfer-encoding": "chunked"}
 
         sent = await streamer.stream_request(reader, writer, headers)
-        # payload: 5 + 2 (CRLF) = 7
         assert sent == 7
         assert writer.data == b"5;ext=value\r\nhello\r\n0\r\n\r\n"
 
@@ -381,7 +375,6 @@ class TestBodyStreamerEdgeCases:
         headers = {"transfer-encoding": "chunked"}
 
         sent = await streamer.stream_request(reader, writer, headers)
-        # payload: 10000 + 2 (CRLF) = 10002
         assert sent == 10002
 
     async def test_content_length_zero(self, streamer):
@@ -422,7 +415,7 @@ class TestBodyStreamerTimeouts:
         streamer = BodyStreamer(read_timeout=0.01, chunk_size=1024)
 
         class SlowReader:
-            async def read(self, n):
+            async def read(self, _):
                 await asyncio.sleep(1)
                 return b"x"
 

@@ -1,5 +1,7 @@
+# Third Party
 import pytest
 
+# Project Modules
 from proxy.config import ProxyConfig
 
 

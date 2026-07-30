@@ -1,7 +1,9 @@
+# Standard Library
 import asyncio
 import re
 from dataclasses import dataclass, field
 
+# Project Modules
 from proxy.buffered_reader import UnreadableStreamReader
 
 _CHUNK_EXT = re.compile(rb"^([0-9a-fA-F]+)(?:;.*)?\r\n")
@@ -23,9 +25,7 @@ class HttpRequest:
     headers: dict[str, str] = field(default_factory=dict)
 
     def to_bytes(self) -> bytes:
-        return _headers_to_bytes(
-            f"{self.method} {self.path} {self.version}", self.headers
-        )
+        return _headers_to_bytes(f"{self.method} {self.path} {self.version}", self.headers)
 
 
 @dataclass(frozen=True)
@@ -36,9 +36,7 @@ class HttpResponse:
     headers: dict[str, str] = field(default_factory=dict)
 
     def to_bytes(self) -> bytes:
-        return _headers_to_bytes(
-            f"{self.version} {self.status_code} {self.reason}", self.headers
-        )
+        return _headers_to_bytes(f"{self.version} {self.status_code} {self.reason}", self.headers)
 
 
 class HttpMessageParser:
@@ -146,9 +144,7 @@ class BodyStreamer:
             want = min(self._chunk_size, remaining)
             chunk = await asyncio.wait_for(reader.read(want), timeout=self._timeout)
             if not chunk:
-                raise BodyStreamerError(
-                    f"Premature EOF: expected {remaining} more bytes"
-                )
+                raise BodyStreamerError(f"Premature EOF: expected {remaining} more bytes")
             writer.write(chunk)
             await asyncio.wait_for(writer.drain(), timeout=self._timeout)
             total += len(chunk)
@@ -176,9 +172,7 @@ class BodyStreamer:
                     reader.read(min(self._chunk_size, want)), timeout=self._timeout
                 )
                 if not chunk:
-                    raise BodyStreamerError(
-                        f"Premature EOF in chunk body, {want} bytes remaining"
-                    )
+                    raise BodyStreamerError(f"Premature EOF in chunk body, {want} bytes remaining")
                 writer.write(chunk)
                 await asyncio.wait_for(writer.drain(), timeout=self._timeout)
                 total += len(chunk)
@@ -202,9 +196,7 @@ class BodyStreamer:
         """Стриминг до закрытия соединения (HTTP/1.0 fallback)."""
         total = 0
         while True:
-            chunk = await asyncio.wait_for(
-                reader.read(self._chunk_size), timeout=self._timeout
-            )
+            chunk = await asyncio.wait_for(reader.read(self._chunk_size), timeout=self._timeout)
             if not chunk:
                 break
             writer.write(chunk)

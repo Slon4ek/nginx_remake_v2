@@ -1,7 +1,9 @@
+# Standard Library
 import logging
 import queue
 from logging.handlers import QueueHandler, QueueListener, RotatingFileHandler
 
+# Project Modules
 from proxy.config import ProxyConfig
 
 

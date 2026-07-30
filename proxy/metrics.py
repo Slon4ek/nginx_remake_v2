@@ -1,11 +1,14 @@
+# Standard Library
 import asyncio
 import logging
 from collections import defaultdict
 from dataclasses import dataclass, field
 
+# Third Party
 from aiohttp import web
 
 logger = logging.getLogger(__name__)
+
 
 @dataclass
 class ProxyMetrics:
@@ -13,12 +16,8 @@ class ProxyMetrics:
     active_connections: int = 0
     total_bytes_in: int = 0
     total_bytes_out: int = 0
-    status_counts: defaultdict[int, int] = field(
-        default_factory=lambda: defaultdict(int)
-    )
-    latency_buckets: defaultdict[str, int] = field(
-        default_factory=lambda: defaultdict(int)
-    )
+    status_counts: defaultdict[int, int] = field(default_factory=lambda: defaultdict(int))
+    latency_buckets: defaultdict[str, int] = field(default_factory=lambda: defaultdict(int))
     _lock: asyncio.Lock = field(init=False, repr=False)
 
     def __post_init__(self):
