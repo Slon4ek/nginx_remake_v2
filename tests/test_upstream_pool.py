@@ -272,7 +272,7 @@ class TestValidation:
 
 
 class TestConfigDefaults:
-    def test_all_defaults_applied(self, _timeouts):
+    def test_all_defaults_applied(self):
         # Project Modules
         from proxy.config import ProxyConfig
 
