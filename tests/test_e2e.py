@@ -80,11 +80,11 @@ async def _start_proxy(upstream_port, upstreams=None, retry_cfg=None, keepalive_
         upstream_pool=pool,
         timeouts=t,
         max_conns=100,
-        max_requests=200,
         metrics=ProxyMetrics(),
         keepalive=keepalive_cfg
         or KeepAliveConfig(enabled=True, timeout_ms=10000, max_requests=200),
         retry_config=retry_cfg or RetryConfig(max_retries=0, base_delay_ms=10, max_delay_ms=50),
+        config_path="",
     )
 
     _loop = asyncio.get_running_loop()
@@ -126,7 +126,7 @@ class TestE2E:
                 assert b"Hello World!" in resp
                 w.close()
             finally:
-                await server.stop()
+                await server._stop()
                 await ptask
 
     async def test_post_echo(self):
@@ -165,7 +165,7 @@ class TestE2E:
                 assert payload in resp
                 w.close()
             finally:
-                await server.stop()
+                await server._stop()
                 await ptask
 
     async def test_bad_gateway_when_upstream_down(self):
@@ -192,7 +192,7 @@ class TestE2E:
             assert b"502 Bad Gateway" in resp
             w.close()
         finally:
-            await server.stop()
+            await server._stop()
             await ptask
 
     async def test_retry_on_500_then_success(self):
@@ -225,7 +225,7 @@ class TestE2E:
                 assert call_count == 2
                 w.close()
             finally:
-                await server.stop()
+                await server._stop()
                 await ptask
 
     async def test_retry_all_fail_returns_502(self):
@@ -249,7 +249,7 @@ class TestE2E:
                 assert b"502 Bad Gateway" in resp
                 w.close()
             finally:
-                await server.stop()
+                await server._stop()
                 await ptask
 
     async def test_keepalive_multiple_requests(self):
@@ -282,5 +282,5 @@ class TestE2E:
 
                 w.close()
             finally:
-                await server.stop()
+                await server._stop()
                 await ptask
