@@ -86,7 +86,7 @@ class ClientHandler:
 
                     resp_meta = await self._read_response_headers(up_reader)
                     if not resp_meta:
-                        pooled_connection.close()
+                        await pooled_connection.close()
                         self._successful_request = False
                         return False
 
@@ -95,7 +95,7 @@ class ClientHandler:
                         delay = min(base_delay * (2 ** attempt), max_delay)
                         logger.warning(
                             "Attempt %d/%d for %s, retry in %.1fs",
-                            attempt + 1, max_retries + 1, self.upstream, delay,
+                            attempt + 1, max_retries, self.upstream, delay,
                         )
                         await asyncio.sleep(delay)
                         continue
