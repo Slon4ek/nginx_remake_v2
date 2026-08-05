@@ -7,6 +7,7 @@ import pytest
 # Project Modules
 from proxy.buffered_reader import UnreadableStreamReader
 from proxy.http_parser import BodyStreamer, BodyStreamerError
+from proxy.timeouts import Timeouts
 
 
 class MockWriter:
@@ -60,7 +61,7 @@ class TestBodyStreamerRequest:
 
     @pytest.fixture
     def streamer(self):
-        return BodyStreamer(read_timeout=1.0, chunk_size=1024)
+        return BodyStreamer(Timeouts(read_ms=1000, write_ms=1000), chunk_size=1024)
 
     # ── Content-Length (identity) ──
 
@@ -185,7 +186,7 @@ class TestBodyStreamerResponse:
 
     @pytest.fixture
     def streamer(self):
-        return BodyStreamer(read_timeout=1.0, chunk_size=1024)
+        return BodyStreamer(Timeouts(read_ms=1000, write_ms=1000), chunk_size=1024)
 
     # ── Content-Length (identity) ──
 
@@ -259,7 +260,7 @@ class TestBodyStreamerIntegration:
 
     @pytest.fixture
     def streamer(self):
-        return BodyStreamer(read_timeout=1.0, chunk_size=1024)
+        return BodyStreamer(Timeouts(read_ms=1000, write_ms=1000), chunk_size=1024)
 
     async def test_stream_request_with_unread_buffer(self, streamer):
         """
@@ -341,7 +342,7 @@ class TestBodyStreamerEdgeCases:
 
     @pytest.fixture
     def streamer(self):
-        return BodyStreamer(read_timeout=0.5, chunk_size=1024)
+        return BodyStreamer(Timeouts(read_ms=500, write_ms=500), chunk_size=1024)
 
     async def test_chunked_zero_chunk_terminates(self, streamer):
         """0\r\n\r\n завершает чтение."""
@@ -412,7 +413,7 @@ class TestBodyStreamerTimeouts:
 
     async def test_read_timeout_raises(self):
         """wait_for на read() кидает TimeoutError."""
-        streamer = BodyStreamer(read_timeout=0.01, chunk_size=1024)
+        streamer = BodyStreamer(Timeouts(read_ms=10, write_ms=5000), chunk_size=1024)
 
         class SlowReader:
             async def read(self, _):
@@ -428,7 +429,7 @@ class TestBodyStreamerTimeouts:
 
     async def test_drain_timeout_raises(self):
         """wait_for на drain() кидает TimeoutError."""
-        streamer = BodyStreamer(read_timeout=1.0, chunk_size=1024)
+        streamer = BodyStreamer(Timeouts(read_ms=5000, write_ms=10), chunk_size=1024)
 
         class SlowWriter:
             def write(self, data):

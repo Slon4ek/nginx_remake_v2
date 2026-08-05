@@ -21,27 +21,23 @@ class CircuitState:
 
 
 class CircuitBreaker:
-    def __init__(self, config: CircuitBreakerConfig):
+    def __init__(self, config: CircuitBreakerConfig, upstream: Upstream | None = None):
         self.config = config
         self.state = CircuitState.CLOSED
         self.failure_count = 0
         self.last_open_time: float = 0.0
         self._lock = asyncio.Lock()
-        self._half_open_allowed = False
+        self._upstream = upstream
 
     def allow_request(self) -> bool:
         now = time.monotonic()
         if self.state == CircuitState.OPEN:
             if now - self.last_open_time >= self.config.cooldown_sec:
                 self.state = CircuitState.HALF_OPEN
-                self._half_open_allowed = True
                 return True
             return False
 
         if self.state == CircuitState.HALF_OPEN:
-            if self._half_open_allowed:
-                self._half_open_allowed = False
-                return True
             return False
 
         return self.state == CircuitState.CLOSED
@@ -49,21 +45,22 @@ class CircuitBreaker:
     async def record_success(self):
         async with self._lock:
             if self.state == CircuitState.HALF_OPEN:
+                logger.info("Circuit breaker %s: HALF_OPEN → CLOSED (апстрим восстановился)", self._upstream)
                 self.state = CircuitState.CLOSED
-                self._half_open_allowed = False
                 self.failure_count = 0
 
     async def record_failure(self):
         async with self._lock:
             self.failure_count += 1
             if self.state == CircuitState.HALF_OPEN:
+                logger.warning("Circuit breaker %s: HALF_OPEN → OPEN (апстрим не прошёл пробу)", self._upstream)
                 self.state = CircuitState.OPEN
                 self.last_open_time = time.monotonic()
                 self.failure_count = 0
-                self._half_open_allowed = False
                 return
 
             if self.failure_count >= self.config.failure_threshold:
+                logger.warning("Circuit breaker %s: CLOSED → OPEN (порог ошибок %d/%d)", self._upstream, self.failure_count, self.config.failure_threshold)
                 self.state = CircuitState.OPEN
                 self.last_open_time = time.monotonic()
 
@@ -102,7 +99,7 @@ class PerUpstreamPool:
         self._lock = asyncio.Lock()
 
     async def acquire(self) -> PooledConnection:
-        await self._semaphore.acquire()
+        await self._timeouts.wait_for_total(self._semaphore.acquire())
         success = False
         try:
             now = time.monotonic()
@@ -190,7 +187,7 @@ class PerUpstreamPool:
             self._idle.clear()
         if to_close:
             await asyncio.gather(*(conn.close() for conn in to_close), return_exceptions=True)
-            logger.debug(f"Force-closed {len(to_close)} idle connections")
+            logger.debug("Принудительно закрыто %d неактивных соединений", len(to_close))
 
 
 class UpstreamsPool:
@@ -222,7 +219,7 @@ class UpstreamsPool:
 
         self._breakers: dict[Upstream, CircuitBreaker] = {}
         if cb_config:
-            self._breakers = {u: CircuitBreaker(cb_config) for u in self._upstreams}
+            self._breakers = {u: CircuitBreaker(cb_config, upstream=u) for u in self._upstreams}
 
     def _validate_init_params(self, upstreams: list[Upstream], max_conns_per_upstream: int) -> None:
         if not upstreams:
@@ -274,7 +271,7 @@ class UpstreamsPool:
 
                 breaker = self._breakers.get(upstream)
                 if breaker and not breaker.allow_request():
-                    logger.debug("Circuit breaker not allowed %s %s", upstream, breaker.state)
+                    logger.debug("Circuit breaker заблокировал %s (состояние %s)", upstream, breaker.state)
                     continue
 
                 return upstream
@@ -298,7 +295,7 @@ class UpstreamsPool:
                     self._status[upstream] = alive
                     status = "alive" if alive else "dead"
                     logger.info(
-                        "Upstream %s status changed: %s -> %s",
+                        "Апстрим %s: статус изменился %s → %s",
                         upstream,
                         "alive" if old_status else "dead",
                         status,
@@ -320,12 +317,12 @@ class UpstreamsPool:
                 await writer.wait_closed()
 
                 await self.set_status(upstream, True)
-                logger.debug("Healthcheck OK for %s", addr)
+                logger.debug("Healthcheck OK для %s", addr)
                 return True
 
             except TimeoutError:
                 logger.warning(
-                    "Healthcheck timeout for %s (connect timeout %.2f s)",
+                    "Healthcheck таймаут для %s (connect timeout %.2f с)",
                     addr,
                     self._timeouts.connect_sec,
                 )
@@ -333,12 +330,12 @@ class UpstreamsPool:
                 return False
 
             except ConnectionRefusedError:
-                logger.warning("Healthcheck failed for %s: connection refused", addr)
+                logger.warning("Healthcheck не удался для %s: соединение отклонено", addr)
                 await self.set_status(upstream, False)
                 return False
 
             except ssl.SSLError as e:
-                logger.warning("Healthcheck failed for %s: SSL error: %s", addr, e)
+                logger.warning("Healthcheck не удался для %s: ошибка SSL: %s", addr, e)
                 await self.set_status(upstream, False)
                 return False
 
@@ -346,17 +343,17 @@ class UpstreamsPool:
                 await self.set_status(upstream, False)
                 if isinstance(e, socket.gaierror):
                     logger.error(
-                        "Healthcheck failed for %s: DNS resolution error: %s",
+                        "Healthcheck не удался для %s: ошибка DNS: %s",
                         addr,
                         e,
                     )
                 else:
-                    logger.warning("Healthcheck failed for %s: %s", addr, e)
+                    logger.warning("Healthcheck не удался для %s: %s", addr, e)
                 return False
 
             except Exception:
                 await self.set_status(upstream, False)
-                logger.exception("Healthcheck unexpected error for %s", addr)
+                logger.exception("Healthcheck: непредвиденная ошибка для %s", addr)
                 return False
 
     async def run_initial_healthcheck(self) -> None:
@@ -364,7 +361,7 @@ class UpstreamsPool:
         await asyncio.gather(*tasks, return_exceptions=True)
 
     async def shutdown(self) -> None:
-        logger.info("Starting upstream pool shutdown...")
+        logger.info("Останавливаем пул апстримов...")
         self._shutdown = True
 
         for pool in self._per_upstream_pools.values():
@@ -374,7 +371,7 @@ class UpstreamsPool:
             self._upstreams.clear()
             self._status.clear()
 
-        logger.info("Upstream pool shutdown complete")
+        logger.info("Пул апстримов остановлен")
 
     @property
     def per_upstream_pools(self):

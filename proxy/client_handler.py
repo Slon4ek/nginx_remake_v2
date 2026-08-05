@@ -16,6 +16,7 @@ from proxy.http_parser import (
     HttpResponseParser,
     is_connection_close,
     safe_method,
+    send_error_response,
 )
 from proxy.metrics import ProxyMetrics
 from proxy.models import KeepAliveConfig, RetryConfig, Upstream
@@ -51,10 +52,11 @@ class ClientHandler:
         self._status_code = 0
         self._successful_request = True
         self._retry_config = retry_config
+        self.response_committed = False
+        self._metrics_recorded = False
+        self._start_request_time = time.monotonic()
 
     async def handle(self) -> bool:
-        start_request_time = time.perf_counter()
-        keep_alive = False
         base_delay = self._retry_config.base_delay_ms / 1000
         max_delay = self._retry_config.max_delay_ms / 1000
         max_retries = self._retry_config.max_retries
@@ -81,33 +83,47 @@ class ClientHandler:
                     up_writer.write(modified_req.to_bytes())
                     await self.timeouts.wait_for_write(up_writer.drain())
 
-                    framer = BodyStreamer(self.timeouts.read_sec, self.chunk_size)
+                    framer = BodyStreamer(self.timeouts, self.chunk_size)
                     self._bytes_in += await framer.stream_request(
                         self.client_reader, up_writer, req_meta.headers
                     )
 
                     resp_meta = await self._read_response_headers(up_reader)
                     if not resp_meta:
+                        logger.warning("Апстрим %s закрыл соединение без ответа", self.upstream)
+                        await self._fail_request(502)
+                        keep_alive = False
                         await pooled_connection.close()
-                        self._successful_request = False
-                        return False
+                        break
 
                     self._status_code = resp_meta.status_code
                     if self._should_retry(req_meta.method, resp_meta) and attempt < max_retries:
                         delay = min(base_delay * (2**attempt), max_delay)
+                        next_upstream = await self.pool.get_next_alive(
+                            excluded={
+                                self.upstream,
+                            }
+                        )
                         logger.warning(
-                            "Attempt %d/%d for %s, retry in %.1fs",
+                            "Попытка %d/%d. %s -> %s: апстрим вернул %d, повтор через %.1f с",
                             attempt + 1,
                             max_retries,
                             self.upstream,
+                            next_upstream
+                            if next_upstream
+                            else "альтернатив нет, повторяем на том же",
+                            resp_meta.status_code,
                             delay,
                         )
+                        if next_upstream is not None:
+                            self.upstream = next_upstream
+                        await pooled_connection.close()
                         await asyncio.sleep(delay)
                         continue
                     elif 500 <= self._status_code < 600:
-                        await self._send_502_bad_gateway()
+                        await self._fail_request(502)
                         keep_alive = False
-                        self._successful_request = False
+                        await pooled_connection.close()
                         break
 
                     logger.debug(
@@ -119,6 +135,7 @@ class ClientHandler:
 
                     modified_resp = self._modify_response_headers(resp_meta, keep_alive)
                     self.client_writer.write(modified_resp.to_bytes())
+                    self.response_committed = True
                     await self.timeouts.wait_for_write(self.client_writer.drain())
 
                     self._bytes_out += await framer.stream_response(
@@ -127,53 +144,39 @@ class ClientHandler:
 
             except TimeoutError as e:
                 logger.warning("Сетевая операция с %s прервана по таймауту: %s", self.upstream, e)
-                await self._send_504_gateway_timeout()
                 keep_alive = False
-                self._successful_request = False
+                await self._fail_request(504)
             except BodyStreamerError as e:
                 logger.error("Ошибка фрейминга ответа от %s: %s", self.upstream, e)
-                await self._send_502_bad_gateway()
                 keep_alive = False
-                self._successful_request = False
+                await self._fail_request(502)
             except (ConnectionRefusedError, ConnectionResetError) as e:
-                logger.error("Апстрим %s отклонил или сбросил соединение: %s", self.upstream, e)
-                await self._send_502_bad_gateway()
+                logger.warning("Апстрим %s отклонил или сбросил соединение: %s", self.upstream, e)
                 keep_alive = False
-                self._successful_request = False
+                await self._fail_request(502)
             except (OSError, ConnectionError, BrokenPipeError) as e:
                 if e.errno in (errno.ECONNRESET, errno.EPIPE, errno.ECONNABORTED):
-                    logger.debug("Client closed connection during write: %s", e)
-                logger.error("Сетевой сбой I/O при работе с %s: %s", self.upstream, e)
-                await self._send_502_bad_gateway()
+                    logger.debug("Клиент закрыл соединение во время записи: %s", e)
+                else:
+                    logger.error("Сетевой сбой I/O при работе с %s: %s", self.upstream, e)
                 keep_alive = False
-                self._successful_request = False
+                await self._fail_request(502)
             except RuntimeError as e:
-                logger.error("Запрос отклонен: пул апстримов перегружен или закрывается: %s", e)
-                await self._send_503_service_unavailable()
+                logger.warning("Запрос отклонён: пул апстримов перегружен или закрывается: %s", e)
                 keep_alive = False
-                self._successful_request = False
+                await self._fail_request(503)
             finally:
                 if not keep_alive:
                     with suppress(OSError, ConnectionError):
                         self.client_writer.close()
                         await self.client_writer.wait_closed()
-                end_request_time = time.perf_counter()
-                duration = end_request_time - start_request_time
-                await self._metrics.inc_requests()
-                await self._metrics.add_bytes(self._bytes_in, self._bytes_out)
-                await self._metrics.record_status(self._status_code)
-                await self._metrics.record_latency(duration * 1000)
-
             if self._successful_request:
                 break
 
             if not keep_alive:
                 break
 
-        if self._successful_request:
-            await self.pool.record_success(self.upstream)
-        else:
-            await self.pool.record_failure(self.upstream)
+        await self.record_metrics()
         return keep_alive
 
     async def _read_request_headers(self) -> HttpRequest | None:
@@ -255,26 +258,24 @@ class ClientHandler:
         h["connection"] = "keep-alive" if keep_alive else "close"
         return HttpResponse(resp.version, resp.status_code, resp.reason, h)
 
-    async def _send_502_bad_gateway(self):
-        await self._write_error_response(b"502", b"Bad Gateway", b"502 Bad Gateway")
+    async def _fail_request(self, status_code: int) -> None:
+        if self.response_committed:
+            return
+        self.response_committed = True
+        self._successful_request = False
+        self._status_code = status_code
+        self._bytes_out += await send_error_response(self.client_writer, status_code)
 
-    async def _send_503_service_unavailable(self):
-        await self._write_error_response(b"503", b"Service Unavailable", b"503 Service Unavailable")
-
-    async def _send_504_gateway_timeout(self):
-        await self._write_error_response(b"504", b"Gateway Timeout", b"504 Gateway Timeout")
-
-    async def _write_error_response(
-        self, status_bytes: bytes, reason_bytes: bytes, body_bytes: bytes
-    ):
-        with suppress(OSError, ConnectionError):
-            response = (
-                b"HTTP/1.1 " + status_bytes + b" " + reason_bytes + b"\r\n"
-                b"Content-Type: text/plain; charset=utf-8\r\n"
-                b"Content-Length: " + str(len(body_bytes)).encode() + b"\r\n"
-                b"Connection: close\r\n\r\n" + body_bytes
-            )
-            self._status_code = int(status_bytes)
-            self._bytes_out += len(response)
-            self.client_writer.write(response)
-            await self.timeouts.wait_for_write(self.client_writer.drain())
+    async def record_metrics(self) -> None:
+        if self._metrics_recorded:
+            return
+        self._metrics_recorded = True
+        duration = time.monotonic() - self._start_request_time
+        await self._metrics.inc_requests()
+        await self._metrics.add_bytes(self._bytes_in, self._bytes_out)
+        await self._metrics.record_status(self._status_code)
+        await self._metrics.record_latency(duration * 1000)
+        if self._successful_request:
+            await self.pool.record_success(self.upstream)
+        else:
+            await self.pool.record_failure(self.upstream)

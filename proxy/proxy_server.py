@@ -7,6 +7,7 @@ from contextlib import suppress
 # Project Modules
 from proxy.client_handler import ClientHandler
 from proxy.config import ProxyConfig
+from proxy.http_parser import send_error_response
 from proxy.metrics import ProxyMetrics
 from proxy.models import KeepAliveConfig, RetryConfig
 from proxy.rate_limiter import RateLimiter
@@ -61,11 +62,12 @@ class ReverseProxy:
             with suppress(NotImplementedError):
                 loop.add_signal_handler(sig, lambda: asyncio.create_task(self._stop()))
 
-        loop.add_signal_handler(
-            signal.SIGHUP,
-            lambda: asyncio.create_task(self._reload_config(self.config_path)),
-        )
-        logger.info("SIGHUP handler registered for hot reload")
+        sighup = getattr(signal, "SIGHUP", None)
+        if sighup is not None:
+            with suppress(NotImplementedError):
+                loop.add_signal_handler(
+                    sighup, lambda: asyncio.create_task(self._reload_config(self.config_path))
+                )
 
         addr = self._server.sockets[0].getsockname()
         logger.info("Reverse Proxy запущен и слушает на %s:%d", *addr)
@@ -108,7 +110,7 @@ class ReverseProxy:
             )
             self.pool = new_pool
 
-            self.rate_limiter = new_config.rate_limit
+            self.rate_limiter = new_config.rate_limiter
 
             logger.info(
                 "Конфигурация перезагружена: %d upstream'ов, keep-alive=%s, timeouts=%s",
@@ -117,9 +119,8 @@ class ReverseProxy:
                 new_config.timeouts,
             )
 
-        except Exception as e:
-            logger.error("Ошибка перезагрузки конфигурации: %s", e)
-            logger.exception("Stack trace:")
+        except Exception:
+            logger.exception("Ошибка перезагрузки конфигурации")
 
     async def _stop(self):
         """
@@ -181,15 +182,15 @@ class ReverseProxy:
         и закрываем клиентский сокет.
         """
         if self._is_shutting_down:
-            await self._send_service_unavailable(writer)
+            await self._send_error_response(writer, 503)
             return
 
         if self.rate_limiter:
             peer = writer.get_extra_info("peername")
             client_ip = peer[0] if peer else None
             if not await self.rate_limiter.allow(client_ip):
-                logger.warning("Rate limit exceeded for %s", client_ip)
-                await self._send_429_too_many_requests(writer)
+                logger.warning("Превышен лимит запросов для клиента %s", client_ip)
+                await self._send_error_response(writer, 429)
                 return
 
         task = asyncio.current_task()
@@ -204,7 +205,7 @@ class ReverseProxy:
                     while keep_alive and not self._is_shutting_down:
                         if requests_handled >= self.keepalive.max_requests:
                             logger.debug(
-                                "Max requests per connection reached (%d)",
+                                "Достигнут лимит запросов на соединение (%d)",
                                 self.keepalive.max_requests,
                             )
                             break
@@ -213,7 +214,7 @@ class ReverseProxy:
 
                         if not upstream_target:
                             logger.error("Нет доступных живых апстримов в пуле")
-                            await self._send_service_unavailable(writer)
+                            await self._send_error_response(writer, 503)
                             break
 
                         handler = ClientHandler(
@@ -232,9 +233,12 @@ class ReverseProxy:
                             )
                         except TimeoutError:
                             logger.warning(
-                                "Total timeout exceeded for %s",
+                                "Превышен общий таймаут для %s",
                                 upstream_target,
                             )
+                            await handler.record_metrics()
+                            if not handler.response_committed:
+                                await self._send_error_response(writer, 504)
                             break
 
                         if writer.is_closing():
@@ -246,7 +250,7 @@ class ReverseProxy:
                             await asyncio.sleep(0)
                 except (RuntimeError, ValueError) as e:
                     logger.error("Внутренний сбой инфраструктуры пула: %s", e)
-                    await self._send_service_unavailable(writer)
+                    await self._send_error_response(writer, 503)
                 except (OSError, ConnectionError) as e:
                     logger.debug("Сетевой сбой при инициализации соединения: %s", e)
                 finally:
@@ -261,7 +265,7 @@ class ReverseProxy:
                 await self.pool.run_initial_healthcheck()
                 await asyncio.sleep(interval_sec)
             except asyncio.CancelledError:
-                logger.info("Periodic healthcheck cancelled")
+                logger.info("Периодическая проверка здоровья остановлена")
                 break
 
     async def reap_idle_connections(self, interval_sec: float) -> None:
@@ -271,37 +275,11 @@ class ReverseProxy:
                     await pool.close_idle()
                 await asyncio.sleep(interval_sec)
             except asyncio.CancelledError:
-                logger.info("Periodic idle connection cancelled")
+                logger.info("Очистка неактивных соединений остановлена")
                 break
 
-    # ─── Отправка ошибок клиенту ─────────────────────────────
-
-    async def _send_service_unavailable(self, writer: asyncio.StreamWriter):
-        """503 Service Unavailable + закрытие соединения."""
-        with suppress(OSError, ConnectionError):
-            response = (
-                b"HTTP/1.1 503 Service Unavailable\r\n"
-                b"Content-Type: text/plain; charset=utf-8\r\n"
-                b"Content-Length: 23\r\n"
-                b"Connection: close\r\n\r\n"
-                b"503 Service Unavailable"
-            )
-            writer.write(response)
-            await writer.drain()
-        await self._close_writer(writer)
-
-    async def _send_429_too_many_requests(self, writer: asyncio.StreamWriter):
-        """429 Too Many Requests + закрытие соединения."""
-        with suppress(OSError, ConnectionError):
-            response = (
-                b"HTTP/1.1 429 Too Many Requests\r\n"
-                b"Content-Type: text/plain; charset=utf-8\r\n"
-                b"Content-Length: 22\r\n"
-                b"Connection: close\r\n\r\n"
-                b"429 Too Many Requests"
-            )
-            writer.write(response)
-            await writer.drain()
+    async def _send_error_response(self, writer: asyncio.StreamWriter, status_code: int) -> None:
+        await send_error_response(writer, status_code)
         await self._close_writer(writer)
 
     async def _close_writer(self, writer: asyncio.StreamWriter):

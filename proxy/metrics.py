@@ -106,7 +106,7 @@ async def run_metrics_server(
     await runner.setup()
     site = web.TCPSite(runner, host, port)
     await site.start()
-    logger.info("Metrics server started on %s:%d", host, port)
+    logger.info("Сервер метрик запущен на %s:%d", host, port)
     try:
         await shutdown_event.wait()
     except asyncio.CancelledError:

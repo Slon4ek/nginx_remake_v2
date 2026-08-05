@@ -242,6 +242,49 @@ class TestE2E:
                 await server._stop()
                 await ptask
 
+    async def test_retry_switches_to_another_upstream(self):
+        bad_calls = {"n": 0}
+        good_calls = {"n": 0}
+
+        async def bad_upstream(reader, writer):
+            await asyncio.wait_for(reader.read(65536), timeout=2.0)
+            bad_calls["n"] += 1
+            writer.write(b"HTTP/1.1 500\r\nContent-Length: 2\r\n\r\nE1")
+            await writer.drain()
+            writer.close()
+
+        async def good_upstream(reader, writer):
+            await asyncio.wait_for(reader.read(65536), timeout=2.0)
+            good_calls["n"] += 1
+            writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello")
+            await writer.drain()
+            writer.close()
+
+        bad_srv = await asyncio.start_server(bad_upstream, "127.0.0.1", 0)
+        good_srv = await asyncio.start_server(good_upstream, "127.0.0.1", 0)
+        bad_port = bad_srv.sockets[0].getsockname()[1]
+        good_port = good_srv.sockets[0].getsockname()[1]
+
+        async with bad_srv, good_srv:
+            retry = RetryConfig(max_retries=1, base_delay_ms=10, max_delay_ms=100)
+            upstreams = [Upstream("127.0.0.1", bad_port), Upstream("127.0.0.1", good_port)]
+            server, proxy_port, _, ptask = await _start_proxy(
+                0, upstreams=upstreams, retry_cfg=retry
+            )
+            try:
+                r, w = await asyncio.open_connection("127.0.0.1", proxy_port)
+                w.write(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n")
+                await w.drain()
+                resp = await _read_http_response(r)
+                assert b"200 OK" in resp
+                assert b"hello" in resp
+                assert bad_calls["n"] == 1
+                assert good_calls["n"] == 1
+                w.close()
+            finally:
+                await server._stop()
+                await ptask
+
     async def test_keepalive_multiple_requests(self):
         async def upstream(reader, writer):
             await asyncio.wait_for(reader.read(65536), timeout=2.0)

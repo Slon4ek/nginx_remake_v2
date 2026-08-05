@@ -210,7 +210,7 @@ latency_bucket{bucket="gt_200ms"} 0
 ## Тестирование
 
 ```bash
-# Все тесты (148 unit-тестов)
+# Все тесты (151 unit-тест)
 python -m pytest tests/ -v
 
 # Отдельные модули
@@ -243,9 +243,9 @@ python -m pytest tests/ -m "not integration and not e2e" -v
 | `test_body_streamer.py` | 28 | BodyStreamer — identity, chunked, stream_to_eof, request/response стратегии, unread integration, timeouts |
 | `test_rate_limiter.py` | 14 | TokenBucket, RateLimiter — global/per-client, burst, refill, concurrency |
 | `test_config.py` | 23 | ProxyConfig.from_yaml — валидация, дефолты, все секции конфига |
-| `test_client_handler.py` | 22 | ClientHandler — обработка запросов, retry, keep-alive, таймауты, ошибки upstream |
-| `test_e2e.py` | 6 | End-to-end — реальный прокси + upstream, round-robin, graceful shutdown |
-| **Итого** | **148** | Все ключевые компоненты |
+| `test_client_handler.py` | 24 | ClientHandler — обработка запросов, retry (вкл. смену апстрима и fallback на единственный), keep-alive, таймауты, ошибки upstream |
+| `test_e2e.py` | 7 | End-to-end — реальный прокси + upstream, retry со сменой апстрима, round-robin, graceful shutdown |
+| **Итого** | **151** | Все ключевые компоненты |
 
 ### Ручное нагрузочное тестирование
 

@@ -1,10 +1,12 @@
 # Standard Library
 import asyncio
 import re
+from contextlib import suppress
 from dataclasses import dataclass, field
 
 # Project Modules
 from proxy.buffered_reader import UnreadableStreamReader
+from proxy.timeouts import Timeouts
 
 _CHUNK_EXT = re.compile(rb"^([0-9a-fA-F]+)(?:;.*)?\r\n")
 
@@ -127,8 +129,8 @@ class BodyStreamer:
     После завершения стриминга reader готов читать следующий запрос.
     """
 
-    def __init__(self, read_timeout: float, chunk_size: int = 65536):
-        self._timeout = read_timeout
+    def __init__(self, timeouts: Timeouts, chunk_size: int = 65536):
+        self._timeouts = timeouts
         self._chunk_size = chunk_size
 
     async def stream_identity(
@@ -142,11 +144,11 @@ class BodyStreamer:
         while total < content_length:
             remaining = content_length - total
             want = min(self._chunk_size, remaining)
-            chunk = await asyncio.wait_for(reader.read(want), timeout=self._timeout)
+            chunk = await self._timeouts.wait_for_read(reader.read(want))
             if not chunk:
                 raise BodyStreamerError(f"Premature EOF: expected {remaining} more bytes")
             writer.write(chunk)
-            await asyncio.wait_for(writer.drain(), timeout=self._timeout)
+            await self._timeouts.wait_for_write(writer.drain())
             total += len(chunk)
         return total
 
@@ -158,7 +160,7 @@ class BodyStreamer:
         """Стриминг Transfer-Encoding: chunked, парсинг «на лету»."""
         total = 0
         while True:
-            line = await asyncio.wait_for(reader.readline(), timeout=self._timeout)
+            line = await self._timeouts.wait_for_read(reader.readline())
             m = _CHUNK_EXT.match(line)
             if not m:
                 raise BodyStreamerError(f"Invalid chunk size: {line!r}")
@@ -168,22 +170,20 @@ class BodyStreamer:
             writer.write(line)
             want = size + 2
             while want > 0:
-                chunk = await asyncio.wait_for(
-                    reader.read(min(self._chunk_size, want)), timeout=self._timeout
-                )
+                chunk = await self._timeouts.wait_for_read(reader.read(min(self._chunk_size, want)))
                 if not chunk:
                     raise BodyStreamerError(f"Premature EOF in chunk body, {want} bytes remaining")
                 writer.write(chunk)
-                await asyncio.wait_for(writer.drain(), timeout=self._timeout)
+                await self._timeouts.wait_for_write(writer.drain())
                 total += len(chunk)
                 want -= len(chunk)
         writer.write(b"0\r\n")
-        await asyncio.wait_for(writer.drain(), timeout=self._timeout)
+        await self._timeouts.wait_for_write(writer.drain())
 
         while True:
-            line = await asyncio.wait_for(reader.readline(), timeout=self._timeout)
+            line = await self._timeouts.wait_for_read(reader.readline())
             writer.write(line)
-            await asyncio.wait_for(writer.drain(), timeout=self._timeout)
+            await self._timeouts.wait_for_write(writer.drain())
             if line == b"\r\n":
                 break
         return total
@@ -196,11 +196,11 @@ class BodyStreamer:
         """Стриминг до закрытия соединения (HTTP/1.0 fallback)."""
         total = 0
         while True:
-            chunk = await asyncio.wait_for(reader.read(self._chunk_size), timeout=self._timeout)
+            chunk = await self._timeouts.wait_for_read(reader.read(self._chunk_size))
             if not chunk:
                 break
             writer.write(chunk)
-            await asyncio.wait_for(writer.drain(), timeout=self._timeout)
+            await self._timeouts.wait_for_write(writer.drain())
             total += len(chunk)
         return total
 
@@ -257,3 +257,26 @@ class BodyStreamer:
     @staticmethod
     def _is_chunked(headers: dict[str, str]) -> bool:
         return headers.get("transfer-encoding", "").lower() == "chunked"
+
+
+async def send_error_response(writer: asyncio.StreamWriter, status_code: int) -> int:
+    reasons = {
+        404: "Not Found",
+        429: "Too Many Requests",
+        500: "Internal Server Error",
+        502: "Bad Gateway",
+        503: "Service Unavailable",
+        504: "Gateway Timeout",
+    }
+    reason = reasons.get(status_code, str(status_code))
+    body = f"{status_code} {reason}".encode()
+    response = (
+        b"HTTP/1.1 " + str(status_code).encode() + b" " + reason.encode() + b"\r\n"
+        b"Content-Type: text/plain; charset=utf-8\r\n"
+        b"Content-Length: " + str(len(body)).encode() + b"\r\n"
+        b"Connection: close\r\n\r\n" + body
+    )
+    with suppress(OSError, ConnectionError):
+        writer.write(response)
+        await writer.drain()
+    return len(response)

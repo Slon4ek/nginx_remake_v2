@@ -35,18 +35,19 @@ def _make_writer():
     return w
 
 
-def _make_pool(*upstream_responses: bytes):
+def _make_pool(*upstream_responses: bytes, upstreams=None):
     class MockPool:
-        def __init__(self, responses):
+        def __init__(self, responses, upstreams):
             self._responses = list(responses)
+            self._upstreams = list(upstreams)
             self.record_success = AsyncMock()
             self.record_failure = AsyncMock()
-            self._call_index = 0
+            self.calls: list[Upstream] = []
 
         @asynccontextmanager
-        async def acquire_connection(self, _upstream):
-            idx = self._call_index
-            self._call_index += 1
+        async def acquire_connection(self, upstream):
+            self.calls.append(upstream)
+            idx = len(self.calls) - 1
             resp = self._responses[idx] if idx < len(self._responses) else b""
             reader = asyncio.StreamReader()
             reader.feed_data(resp)
@@ -54,7 +55,15 @@ def _make_pool(*upstream_responses: bytes):
             writer = _make_writer()
             yield MockPooledConnection(reader, writer)
 
-    return MockPool(list(upstream_responses))
+        async def get_next_alive(self, excluded=None):
+            excluded = excluded or set()
+            for upstream in self._upstreams:
+                if upstream not in excluded:
+                    return upstream
+            return None
+
+    default_upstream = Upstream("127.0.0.1", 9001)
+    return MockPool(list(upstream_responses), list(upstreams or [default_upstream]))
 
 
 def make_handler(
@@ -64,6 +73,8 @@ def make_handler(
     keepalive=None,
     retry_config=None,
     metrics=None,
+    upstreams=None,
+    upstream=None,
 ):
     t = timeouts or Timeouts(connect_ms=5000, read_ms=5000, write_ms=5000, total_ms=10000)
     ka = keepalive or KeepAliveConfig(enabled=True, timeout_ms=60000, max_requests=200)
@@ -77,8 +88,8 @@ def make_handler(
     client_writer = _make_writer()
     client_writer.get_extra_info.return_value = ("127.0.0.1", 12345)
 
-    upstream = Upstream("127.0.0.1", 9001)
-    pool = _make_pool(*upstream_responses)
+    upstream = upstream or Upstream("127.0.0.1", 9001)
+    pool = _make_pool(*upstream_responses, upstreams=upstreams or [upstream])
 
     handler = ClientHandler(
         client_reader=client_reader,
@@ -216,6 +227,49 @@ class TestClientHandler:
         pool.record_failure.assert_awaited_once()
         pool.record_success.assert_not_awaited()
 
+    # ─── Retry: переключение на другой апстрим ────────────────
+
+    async def test_retry_switches_to_another_upstream(self):
+        bad_upstream = Upstream("127.0.0.1", 9100)
+        good_upstream = Upstream("127.0.0.1", 9101)
+        rc = RetryConfig(max_retries=1, base_delay_ms=10, max_delay_ms=50)
+        handler, pool, _ = make_handler(
+            b"GET / HTTP/1.1\r\nHost: x\r\n\r\n",
+            b"HTTP/1.1 500\r\nContent-Length: 2\r\n\r\nE1",
+            b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello",
+            retry_config=rc,
+            upstreams=[bad_upstream, good_upstream],
+            upstream=bad_upstream,
+        )
+        ka = await handler.handle()
+        assert ka is True
+        assert pool.calls == [bad_upstream, good_upstream]
+        assert handler.upstream == good_upstream
+        pool.record_success.assert_awaited_once()
+        pool.record_failure.assert_not_awaited()
+        assert handler._status_code == 200
+        assert (await handler._metrics.snapshot())["status_counts"] == {200: 1}
+
+    async def test_retry_falls_back_to_same_upstream_when_no_alternative(self):
+        only_upstream = Upstream("127.0.0.1", 9100)
+        rc = RetryConfig(max_retries=1, base_delay_ms=10, max_delay_ms=50)
+        handler, pool, _ = make_handler(
+            b"GET / HTTP/1.1\r\nHost: x\r\n\r\n",
+            b"HTTP/1.1 500\r\nContent-Length: 2\r\n\r\nE1",
+            b"HTTP/1.1 500\r\nContent-Length: 2\r\n\r\nE2",
+            retry_config=rc,
+            upstreams=[only_upstream],
+            upstream=only_upstream,
+        )
+        ka = await handler.handle()
+        assert ka is False
+        assert pool.calls == [only_upstream, only_upstream]
+        assert handler.upstream == only_upstream
+        pool.record_failure.assert_awaited_once()
+        pool.record_success.assert_not_awaited()
+        assert handler._status_code == 502
+        assert (await handler._metrics.snapshot())["status_counts"] == {502: 1}
+
     # ─── No retry for non-safe methods ────────────────────────
 
     async def test_post_500_no_retry_non_safe(self):
@@ -352,7 +406,7 @@ class TestClientHandler:
             metrics=m,
         )
         await handler.handle()
-        assert m.total_requests == 2
+        assert m.total_requests == 1
         assert m.status_counts[200] == 1
         assert m.active_connections == 0
 
@@ -366,7 +420,7 @@ class TestClientHandler:
             metrics=m,
         )
         await handler.handle()
-        assert m.total_requests == 3
+        assert m.total_requests == 1
         assert m.status_counts[502] == 1
         assert m.active_connections == 0
 

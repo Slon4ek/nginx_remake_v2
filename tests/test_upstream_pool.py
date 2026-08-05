@@ -237,12 +237,12 @@ class TestStatus:
         caplog.set_level(logging.INFO)
         u = Upstream("127.0.0.1", 9001)
         asyncio.run(pool.set_status(u, False))
-        assert "status changed: alive -> dead" in caplog.text
+        assert "статус изменился" in caplog.text
 
     def test_set_same_status_no_log(self, pool, caplog):
         u = Upstream("127.0.0.1", 9001)
         asyncio.run(pool.set_status(u, True))
-        assert "status changed" not in caplog.text
+        assert "статус изменился" not in caplog.text
 
     def test_set_status_unknown_upstream(self, pool):
         u = Upstream("0.0.0.0", 1)
